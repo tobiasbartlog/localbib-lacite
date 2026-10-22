@@ -1,0 +1,12 @@
+# What the LaCite Bundle needs to run its own tests WITHOUT the LocalBib core
+# (the isolated CI job). The contract package comes on top:
+#
+#     pip install ./plugin_api -r plugins/lacite/requirements-dev.txt
+#
+# Runtime libraries LaCite imports itself (stdlib otherwise):
+fastapi>=0.115.0,<0.116  # the Add-on's router (connections, sync, MCP)
+pydantic>=2.0            # request models of the router
+# Test tools
+httpx>=0.27.0            # the TestClient transport
+pytest>=8.0.0
+import-linter>=2.0       # plugins/lacite/.importlinter (P3 boundary)

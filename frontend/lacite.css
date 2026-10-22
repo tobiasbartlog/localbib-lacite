@@ -1,0 +1,214 @@
+/* lacite — the LaCite page. Only what the core has no class for; every colour,
+   font and motion is a --lb-* token (DESIGN.md, Token-Only Rule). Keys, fields,
+   tabs, cards and the page head are the core's own (lb-key, lb-input, lb-tabs,
+   lb-set-card, lb-page-head). Desktop only, 1366 × 768 is the smallest. */
+
+.lacite-view { max-width: 1104px; }
+.lacite-head { align-items: flex-start; }
+.lacite-lede {
+  margin: 4px 0 0; max-width: 640px;
+  font-family: var(--lb-font-serif); font-size: 17px; line-height: 1.6; color: var(--lb-ink-2);
+}
+.lacite-lede .lb-mono { font-size: 14px; }
+.lacite-help { font-family: var(--lb-font-serif); font-size: 17px; }
+.lacite-help[aria-pressed="true"] { background: var(--lb-bg-soft); color: var(--lb-ink); }
+
+/* the core page gets border-box from its preflight; say it here too */
+.lacite-view *, .lacite-overlay * { box-sizing: border-box; }
+
+/* type */
+.lacite-label {
+  margin: 0;
+  font-family: var(--lb-font-mono); font-size: 10.5px; font-weight: 500;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--lb-ink-3);
+}
+.lacite-h3 { margin: 0; font-family: var(--lb-font-serif); font-size: 19px; font-weight: 500; color: var(--lb-ink); }
+.lacite-h3-sm { font-size: 17px; }
+.lacite-p { margin: 0; color: var(--lb-ink-2); font-size: 13.5px; line-height: 1.55; }
+.lacite-p b, .lacite-step b { font-weight: 500; }
+.lacite-measure { max-width: 640px; }
+.lacite-small { font-size: 12.5px; }
+.lacite-muted { color: var(--lb-ink-3); }
+.lacite-strong { font-weight: 500; color: var(--lb-ink); }
+.lacite-normal { font-weight: 400; }
+.lacite-ok { color: var(--lb-ok); }
+.lacite-warn { color: var(--lb-warn); }
+.lacite-accent { color: var(--lb-accent); }
+.lacite-accent-ink { color: var(--lb-accent-ink); }
+.lacite-struck { text-decoration: line-through; color: var(--lb-ink-3); }
+.lacite-error { margin: 0; color: var(--lb-danger); font-size: 13px; }
+
+/* layout */
+.lacite-section { display: flex; flex-direction: column; gap: 14px; }
+.lacite-overview { display: flex; flex-direction: column; gap: 32px; }
+.lacite-tutorial { display: flex; flex-direction: column; gap: 28px; }
+.lacite-stack { display: flex; flex-direction: column; gap: 16px; }
+.lacite-stack-sm { display: flex; flex-direction: column; gap: 10px; }
+.lacite-stack-xs { display: flex; flex-direction: column; gap: 4px; }
+.lacite-row { display: flex; gap: 10px; align-items: center; }
+.lacite-row-between { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.lacite-wrap { flex-wrap: wrap; }
+.lacite-align-end { align-items: flex-end; }
+.lacite-align-start { align-items: flex-start; }
+.lacite-grow { flex: 1; min-width: 0; }
+.lacite-actions { display: flex; gap: 8px; }
+.lacite-self-start { align-self: flex-start; }
+.lacite-mt { margin-top: 8px; }
+.lacite-two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+
+/* the tutorial */
+.lacite-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.lacite-step { min-width: 0; padding: 22px; display: flex; flex-direction: column; gap: 12px; }
+.lacite-step-head { display: flex; align-items: baseline; gap: 10px; }
+.lacite-step-n { font-family: var(--lb-font-serif); font-size: 28px; line-height: 1; color: var(--lb-accent); }
+.lacite-step-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+.lacite-folder-demo {
+  margin-top: auto; display: flex; align-items: center; gap: 10px; color: var(--lb-ink-3);
+  background: var(--lb-bg); border: 1px dashed var(--lb-hairline-2); border-radius: 10px; padding: 14px;
+}
+.lacite-folder-demo-lines { display: flex; flex-direction: column; line-height: 1.35; font-size: 12.5px; color: var(--lb-ink); }
+.lacite-folder-demo-lines .lb-mono { font-size: 12px; }
+.lacite-bubble { max-width: 90%; padding: 8px 11px; font-size: 12.5px; }
+.lacite-bubble-me { align-self: flex-end; background: var(--lb-bg-soft); border-radius: 12px 12px 3px 12px; }
+.lacite-bubble-ai {
+  align-self: flex-start; background: var(--lb-bg-elev); color: var(--lb-ink-2);
+  border: 1px solid var(--lb-hairline); border-radius: 12px 12px 12px 3px;
+}
+.lacite-bubble-ai .lb-mono { font-size: 11.5px; }
+.lacite-cta { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding-top: 4px; }
+.lacite-key-lg { height: 42px; padding: 0 20px; font-size: 13.5px; }
+.lacite-note {
+  display: flex; gap: 14px; align-items: flex-start;
+  border-top: 1px solid var(--lb-hairline); padding-top: 22px; color: var(--lb-ink-2); font-size: 13px;
+}
+.lacite-note svg { flex: none; margin-top: 2px; color: var(--lb-ink-3); }
+.lacite-note p { margin: 0; max-width: 760px; }
+
+/* tags, pills, code */
+.lacite-tag {
+  font-family: var(--lb-font-mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase;
+  color: var(--lb-ink-3); border: 1px solid var(--lb-hairline); border-radius: 3px; padding: 2px 7px;
+}
+.lacite-tag-accent { margin-left: 6px; color: var(--lb-accent-ink); background: var(--lb-accent-soft); border-color: transparent; }
+.lacite-pill {
+  display: inline-flex; align-items: center; gap: 7px; flex: none;
+  padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap;
+}
+.lacite-pill-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.lacite-pill.is-ok { background: var(--lb-ok-soft); color: var(--lb-ok); }
+.lacite-pill.is-soft { background: var(--lb-bg-soft); color: var(--lb-ink-2); }
+.lacite-pill.is-danger { background: var(--lb-danger-soft); color: var(--lb-danger); }
+.lacite-code {
+  font-family: var(--lb-font-mono); font-size: 12px; line-height: 1.7; color: var(--lb-ink);
+  background: var(--lb-bg-soft); border: 1px solid var(--lb-hairline); border-radius: 7px;
+  padding: 10px 12px; white-space: pre; overflow-x: auto;
+}
+.lacite-code-line { flex: 1; min-width: 240px; padding: 7px 12px; }
+
+/* cards */
+.lacite-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
+.lacite-card.is-alert { border-color: var(--lb-danger-soft); }
+.lacite-facts { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 4px 14px; font-size: 13px; }
+.lacite-callout {
+  display: flex; gap: 12px; align-items: flex-start; border-radius: 10px; padding: 12px 14px; color: var(--lb-ink);
+}
+.lacite-callout svg { flex: none; margin-top: 1px; }
+.lacite-callout.is-ok { background: var(--lb-ok-soft); }
+.lacite-callout.is-ok svg { color: var(--lb-ok); }
+.lacite-callout.is-warn { background: var(--lb-warn-soft); }
+.lacite-callout.is-warn svg { color: var(--lb-warn); }
+.lacite-small-callout { padding: 9px 12px; border-radius: 8px; font-size: 13px; gap: 10px; }
+.lacite-confirm {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  border: 1px solid var(--lb-danger-soft); background: var(--lb-danger-soft);
+  border-radius: 8px; padding: 10px 12px; font-size: 13px; color: var(--lb-ink);
+}
+.lacite-confirm b { font-weight: 500; }
+.lb-key.lacite-key-danger { color: var(--lb-danger); }
+.lb-key.lacite-key-danger:hover:not(:disabled) { color: var(--lb-danger); background: var(--lb-danger-soft); }
+.lb-key.lacite-key-ghost { border-color: transparent; box-shadow: none; background: transparent; }
+
+/* the assistant section */
+.lacite-ki-card { padding: 0; }
+.lacite-ki-tabs { padding: 10px 14px; border-bottom: 1px solid var(--lb-hairline); }
+.lacite-ki-tabs .lb-tabs { max-width: 620px; }
+.lacite-ki-body { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
+.lacite-ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 12px; color: var(--lb-ink-2); }
+.lacite-ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; color: var(--lb-ink-2); }
+.lacite-prompt {
+  background: var(--lb-bg-soft); border-radius: 10px; padding: 12px 14px;
+  font-family: var(--lb-font-serif); font-size: 15.5px; line-height: 1.55; color: var(--lb-ink);
+}
+
+/* the dialog */
+.lacite-overlay {
+  position: fixed; inset: 0; z-index: 100; background: rgba(16, 14, 8, .36);
+  display: flex; align-items: flex-start; justify-content: center; padding: 56px 16px; overflow-y: auto;
+  animation: lacite-fade var(--lb-dur-3) var(--lb-ease-out);
+}
+@keyframes lacite-fade { from { opacity: 0; } to { opacity: 1; } }
+.lacite-dialog {
+  width: 640px; max-width: 100%; background: var(--lb-bg-elev); border-radius: 14px;
+  box-shadow: var(--lb-shadow-lg); display: flex; flex-direction: column;
+}
+.lacite-dialog-head { padding: 22px 26px 0; display: flex; flex-direction: column; gap: 16px; }
+.lacite-dialog-title { margin: 0; font-family: var(--lb-font-serif); font-size: 22px; font-weight: 500; color: var(--lb-ink); }
+.lacite-dialog-body { padding: 20px 26px 22px; min-height: 330px; }
+.lacite-dialog-foot {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 14px 26px; border-top: 1px solid var(--lb-hairline); background: var(--lb-bg); border-radius: 0 0 14px 14px;
+}
+.lacite-progress {
+  list-style: none; margin: 0; padding: 0 0 16px; border-bottom: 1px solid var(--lb-hairline);
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
+.lacite-progress li { display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; color: var(--lb-ink-3); }
+.lacite-progress-bar { height: 3px; border-radius: 2px; background: var(--lb-hairline); }
+.lacite-progress li.is-on .lacite-progress-bar { background: var(--lb-accent); }
+.lacite-progress li.is-current { color: var(--lb-ink); font-weight: 500; }
+.lacite-choice {
+  appearance: none; display: flex; gap: 12px; align-items: flex-start; text-align: left; width: 100%;
+  padding: 14px 16px; border-radius: 10px; border: 1px solid var(--lb-hairline);
+  background: var(--lb-bg-elev); cursor: pointer; font: inherit; color: var(--lb-ink-2);
+}
+.lacite-choice:hover:not(:disabled) { border-color: var(--lb-hairline-2); }
+.lacite-choice:focus-visible { outline: 2px solid var(--lb-accent); outline-offset: 2px; }
+.lacite-choice:disabled { opacity: .5; cursor: default; }
+.lacite-choice.is-on { border-color: var(--lb-accent); background: var(--lb-accent-soft); box-shadow: 0 0 0 1px var(--lb-accent) inset; }
+.lacite-choice-text { display: flex; flex-direction: column; gap: 2px; }
+.lacite-pick {
+  flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 26px;
+  border-style: dashed; border-color: var(--lb-hairline-2); color: var(--lb-ink-2); text-align: center;
+}
+.lacite-dot {
+  flex: none; width: 16px; height: 16px; margin-top: 2px; border-radius: 50%;
+  border: 1.5px solid var(--lb-mute); box-sizing: border-box;
+}
+.lacite-choice.is-on .lacite-dot { border: 5px solid var(--lb-accent); }
+.lacite-list { margin-left: 28px; border: 1px solid var(--lb-hairline); border-radius: 10px; overflow: hidden; max-height: 220px; overflow-y: auto; }
+.lacite-list-row {
+  appearance: none; display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%;
+  padding: 9px 12px; border: 0; border-bottom: 1px solid var(--lb-hairline); background: transparent;
+  cursor: pointer; font: inherit; font-size: 13px; color: var(--lb-ink); text-align: left;
+}
+.lacite-list-row:last-child { border-bottom: 0; }
+.lacite-list-row:hover { background: var(--lb-bg); }
+.lacite-list-row.is-on, .lacite-list-row.is-on:hover { background: var(--lb-accent-soft); }
+.lacite-list-row .lb-mono { font-size: 11.5px; }
+.lacite-list-empty { margin: 0; padding: 10px 12px; }
+.lacite-folder-row { display: flex; gap: 12px; align-items: center; border: 1px solid var(--lb-hairline); border-radius: 10px; padding: 12px 14px; color: var(--lb-ink-2); }
+.lacite-path { font-size: 12.5px; color: var(--lb-ink); }
+.lacite-field { display: flex; flex-direction: column; gap: 6px; }
+.lacite-field-narrow { max-width: 280px; }
+.lacite-paste { display: flex; gap: 10px; align-items: flex-end; }
+.lacite-link {
+  appearance: none; border: 0; background: none; padding: 0; cursor: pointer;
+  font: inherit; color: var(--lb-accent);
+}
+.lacite-link:hover { color: var(--lb-accent-ink); text-decoration: underline; }
+
+.lacite-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 110;
+  background: var(--lb-ink); color: var(--lb-bg); border-radius: 10px; padding: 10px 16px; font-size: 13px;
+  box-shadow: var(--lb-shadow-lg);
+}

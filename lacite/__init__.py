@@ -1,0 +1,88 @@
+"""LaCite — LocalBib's library inside any LaTeX editor, shipped as a Bundle under ``plugins/lacite``.
+
+Two ways in, both editor-agnostic (docs/lacite/PLAN.md):
+
+1. a ``.bib`` file LaCite keeps current inside the user's LaTeX project
+   folders (one file per *connection*: folder + source + file name);
+2. an MCP endpoint (``POST /api/plugins/lacite/mcp``) so writing agents can
+   search the library, read passages with page numbers and cite them.
+
+``activate()`` builds the sync engine over ``api.library`` and the Add-on's
+own ``SettingsApi`` key ``connections``, subscribes to the core's change feed,
+starts the background poll (~30 s) and registers the router and the nav item.
+``deactivate()`` stops the poll and unsubscribes; the core registry drops the
+nav item and unmounts the router (residue-free). LaCite writes exactly one
+file per connection and never deletes anything.
+
+P3 boundary: this package imports **only** from ``plugin_api`` (plus stdlib
+and FastAPI for its router), never from the core or another Add-on. Enforced
+by the Bundle's ``.importlinter`` (contract ``lacite-only-plugin-api``).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+from typing import Any, Optional
+
+from plugin_api import PluginApi, load_manifest
+
+BUNDLE_ROOT = Path(__file__).resolve().parent.parent
+
+
+def refused_roots(core_base_dir: str = "") -> list[str]:
+    """Folders a connection may never point into: the library base folder
+    and the Add-on folders (a Dev-Suchpfad's ``plugins/``, an installed
+    Bundle's ``<plugins>/lacite/<version>`` and the plugins folder above it)."""
+    roots = [core_base_dir, str(BUNDLE_ROOT)]
+    parent = BUNDLE_ROOT.parent
+    roots.append(str(parent.parent if parent.name == "lacite" else parent))
+    return [r for r in roots if r]
+
+
+class LaCitePlugin:
+    manifest = load_manifest(BUNDLE_ROOT)
+
+    def __init__(self) -> None:
+        self.engine: Optional[Any] = None
+        self.mcp: Optional[Any] = None
+
+    async def activate(self, api: PluginApi) -> None:
+        from lacite.engine import Engine
+        from lacite.mcp import McpServer
+
+        if api.library is None:
+            raise RuntimeError("LaCite braucht die Berechtigung library.read")
+        settings = api.settings
+        core = settings.core() if settings is not None else None
+        self.engine = Engine(api.library, settings,
+                             refused_roots=refused_roots(core.base_dir if core is not None else ""))
+        self.mcp = McpServer(api.library, sync_all=lambda: self.engine.sync_all(force=True),
+                             version=self.manifest.version)
+        router = _build_router(self)
+        if router is not None:
+            api.routes.register_router(router)
+        if self.manifest.nav is not None:
+            api.ui.register_nav_item(self.manifest.nav)
+        self.engine.start()
+
+    async def deactivate(self) -> None:
+        if self.engine is not None:
+            # stop() joins the poll thread: never block the event loop on it
+            await asyncio.to_thread(self.engine.stop)
+        self.engine = None
+        self.mcp = None
+
+
+def _build_router(plugin: "LaCitePlugin") -> Any:
+    try:
+        from lacite.api import build_router
+    except ModuleNotFoundError as exc:
+        if exc.name not in ("fastapi", "pydantic", "starlette"):
+            raise
+        return None  # contract-only test run: no web framework installed
+    return build_router(plugin.engine, plugin.mcp, version=plugin.manifest.version)
+
+
+# The core registry loads this module and reads ``plugin``.
+plugin = LaCitePlugin()

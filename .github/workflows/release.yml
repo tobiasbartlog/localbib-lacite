@@ -1,0 +1,65 @@
+# Build workflow of a LocalBib Add-on repository (ADR-0021).
+#
+# This repository is exported from the LocalBib development repo; the file is
+# added by the export. On a version tag it checks the Bundle, builds it with
+# `localbib-addon build`, verifies the checksum and the index snippet and
+# attaches Zip, checksum and snippet to the GitHub Release. The snippet is what
+# the Marketplace-Index takes over, so the checksum is never copied by hand.
+#
+# Every `run:` step is a single line on purpose: the development repo rehearses
+# this file locally (scripts/addon_release.py) by executing exactly these lines.
+name: Release Add-on
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # A Bundle with a CPython build tag ("cp313-win_amd64") ships bytecode
+      # for that interpreter, and `localbib-addon build` refuses to compile it
+      # on another one, so the build runs on the Python the tag names (bytecode
+      # does not depend on the OS, only on the version). The tag comes from a
+      # vendor lock "requirements-vendor-<tag>.txt" if the Bundle has one (see
+      # the vendor step below), else from the Manifest. "any" builds on 3.13.
+      - name: Python version from the build tag
+        id: python
+        run: python -c "import glob, json, os, re; f = glob.glob('requirements-vendor-*.txt'); t = f[0][len('requirements-vendor-'):-4] if len(f) == 1 else json.load(open('plugin.json', encoding='utf-8'))['python']; m = re.match(r'cp(\d)(\d+)-', t); v = m.group(1) + '.' + m.group(2) if m else '3.13'; out = os.environ.get('GITHUB_OUTPUT'); f = open(out, 'a') if out else None; print('version=' + v, file=f)"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ steps.python.outputs.version }}
+      # The package's major is the Contract version (API_VERSION); an older
+      # release of this major lacks the bytecode and vendor/ rules.
+      - name: Install the Add-on Contract
+        run: python -m pip install "localbib-plugin-api[dev]>=2,<3"
+      - name: Tag matches the Manifest version
+        run: python -c "import json, os, sys; v = json.load(open('plugin.json', encoding='utf-8'))['version']; t = os.environ['GITHUB_REF_NAME']; sys.exit(0 if t == 'v' + v else 'tag ' + t + ' does not match the Manifest version v' + v)"
+      # A Bundle that needs third-party libraries the core does not ship keeps
+      # a hash-pinned lock "requirements-vendor-<tag>.txt" (for example
+      # requirements-vendor-cp313-win_amd64.txt) next to plugin.json. This step
+      # installs exactly those wheels for the tag's interpreter and platform
+      # into vendor/ (the loader puts it on sys.path) and writes the tag into
+      # the Manifest's "python", so the built Bundle is offered only to a core
+      # that can load its binaries. The source tree keeps "python": "any" and
+      # runs as a Dev-Suchpfad on any interpreter. No lock, nothing happens.
+      - name: Vendor the runtime libraries
+        run: python -c "import glob, json, re, subprocess, sys; f = glob.glob('requirements-vendor-*.txt'); f or sys.exit(0); len(f) == 1 or sys.exit('more than one vendor lock - ' + ', '.join(sorted(f))); t = f[0][len('requirements-vendor-'):-4]; m = re.fullmatch(r'cp(\d)(\d+)-(\w+)', t); m or sys.exit(f[0] + ' does not name a CPython build tag'); d = json.load(open('plugin.json', encoding='utf-8')); d['python'] in ('any', t) or sys.exit('plugin.json names python ' + d['python'] + ' but the vendor lock is for ' + t); subprocess.run([sys.executable, '-m', 'pip', 'install', '--target', 'vendor', '--no-deps', '--require-hashes', '--only-binary=:all:', '--no-compile', '--implementation', 'cp', '--python-version', m.group(1) + '.' + m.group(2), '--abi', 'cp' + m.group(1) + m.group(2), '--platform', m.group(3), '-r', f[0]], check=True); d['python'] = t; open('plugin.json', 'w', encoding='utf-8', newline=chr(10)).write(json.dumps(d, indent=2, ensure_ascii=False) + chr(10))"
+      - name: Check the Bundle
+        run: localbib-addon check .
+      - name: Build the Bundle
+        run: localbib-addon build . --out dist
+      - name: Verify checksum and index snippet
+        run: python -c "import glob, hashlib, json, os, sys; z = glob.glob('dist/*.zip'); assert len(z) == 1, z; h = hashlib.sha256(open(z[0], 'rb').read()).hexdigest(); s = json.load(open(z[0][:-4] + '.index.json', encoding='utf-8')); c = open(z[0] + '.sha256', encoding='utf-8').read().split()[0]; sys.exit(0 if s['sha256'] == h == c and s['artifact'] == os.path.basename(z[0]) else 'checksum, snippet and zip disagree')"
+      - name: Attach the Bundle to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes "Bundle, checksum and index snippet built by localbib-addon." || gh release upload "$GITHUB_REF_NAME" dist/* --clobber

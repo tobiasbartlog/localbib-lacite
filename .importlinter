@@ -1,0 +1,46 @@
+# P3 — "Eine Grenze, ein Vertrag" fuer das LaCite-Bundle (ADR-0021).
+#
+# LaCite importiert ausschliesslich aus plugin_api (plus stdlib und FastAPI
+# fuer seinen Router), nie aus dem LocalBib-Kern und nie aus einem anderen
+# Add-on. Aus diesem Ordner pruefen:
+#
+#     cd plugins/lacite && lint-imports
+#
+# Der Kern muss dafuer nicht installiert sein: include_external_packages
+# erfasst jeden Import ausserhalb von `lacite` mit seinem Top-Level-Namen, der
+# Vertrag verbietet die Namen der Kernmodule. Laeuft im Haupt-CI-Job und im
+# isolierten LaCite-Job (nur Bundle + Contract-Paket installiert).
+[importlinter]
+root_packages =
+    lacite
+include_external_packages = True
+
+[importlinter:contract:lacite-only-plugin-api]
+name = LaCite importiert nur aus plugin_api, nie aus dem Kern (auch nicht Atlas oder Hipster)
+type = forbidden
+source_modules =
+    lacite
+forbidden_modules =
+    webapp
+    literature_manager
+    config
+    context
+    database
+    registry
+    plugin_loader
+    plugins_config
+    settings_store
+    host_services
+    llm_client
+    llm_config
+    openalex_client
+    paper_matcher
+    citation_graph_builder
+    network_orchestrator
+    metadata_validation
+    validation_policy
+    passage_retrieval
+    routers
+    services
+    atlas
+    hipster
