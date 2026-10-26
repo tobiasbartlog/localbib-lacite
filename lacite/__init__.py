@@ -9,9 +9,11 @@ Two ways in, both editor-agnostic (docs/lacite/PLAN.md):
 
 ``activate()`` builds the sync engine over ``api.library`` and the Add-on's
 own ``SettingsApi`` key ``connections``, subscribes to the core's change feed,
-starts the background poll (~30 s) and registers the router and the nav item.
-``deactivate()`` stops the poll and unsubscribes; the core registry drops the
-nav item and unmounts the router (residue-free). LaCite writes exactly one
+starts the background poll (~30 s), binds the live session (``SessionLog`` +
+``EventBroadcaster`` on the server loop) and registers the router and the nav
+item. ``deactivate()`` stops the poll, unsubscribes, unhooks the session log
+and ends open live streams; the core registry drops the nav item and unmounts
+the router (residue-free). LaCite writes exactly one
 file per connection and never deletes anything.
 
 P3 boundary: this package imports **only** from ``plugin_api`` (plus stdlib
@@ -46,10 +48,14 @@ class LaCitePlugin:
     def __init__(self) -> None:
         self.engine: Optional[Any] = None
         self.mcp: Optional[Any] = None
+        self.session: Optional[Any] = None
+        self.events: Optional[Any] = None
 
     async def activate(self, api: PluginApi) -> None:
         from lacite.engine import Engine
+        from lacite.events import EventBroadcaster
         from lacite.mcp import McpServer
+        from lacite.session_log import SessionLog
 
         if api.library is None:
             raise RuntimeError("LaCite braucht die Berechtigung library.read")
@@ -57,8 +63,12 @@ class LaCitePlugin:
         core = settings.core() if settings is not None else None
         self.engine = Engine(api.library, settings,
                              refused_roots=refused_roots(core.base_dir if core is not None else ""))
+        # The live session: MCP calls (threadpool) -> ring buffer -> SSE (event loop).
+        self.events = EventBroadcaster()
+        self.events.bind_loop(asyncio.get_running_loop())
+        self.session = SessionLog(publish=self.events.publish)
         self.mcp = McpServer(api.library, sync_all=lambda: self.engine.sync_all(force=True),
-                             version=self.manifest.version)
+                             version=self.manifest.version, log=self.session.record)
         router = _build_router(self)
         if router is not None:
             api.routes.register_router(router)
@@ -70,8 +80,16 @@ class LaCitePlugin:
         if self.engine is not None:
             # stop() joins the poll thread: never block the event loop on it
             await asyncio.to_thread(self.engine.stop)
+        if self.mcp is not None:
+            self.mcp.log = None
+        if self.session is not None:
+            self.session.publish = None
+        if self.events is not None:
+            self.events.close()  # open live windows' streams end
         self.engine = None
         self.mcp = None
+        self.session = None
+        self.events = None
 
 
 def _build_router(plugin: "LaCitePlugin") -> Any:
@@ -81,7 +99,8 @@ def _build_router(plugin: "LaCitePlugin") -> Any:
         if exc.name not in ("fastapi", "pydantic", "starlette"):
             raise
         return None  # contract-only test run: no web framework installed
-    return build_router(plugin.engine, plugin.mcp, version=plugin.manifest.version)
+    return build_router(plugin.engine, plugin.mcp, version=plugin.manifest.version,
+                        session=plugin.session, events=plugin.events)
 
 
 # The core registry loads this module and reads ``plugin``.

@@ -1,10 +1,14 @@
 // lacite — the frontend of the LaCite Bundle (Add-on Contract 2).
 //
-// One script per Bundle. It holds the one LaCite page (/lacite): the tutorial
+// One script per Bundle. It holds the LaCite page (/lacite): the tutorial
 // that is also the empty state, the connection cards with every state
-// (Aktuell, Wird aktualisiert, Pausiert, Fehler), the three-step dialog
-// "Neue Verbindung" and the section "KI-Assistent verbinden". Layout, copy and
-// states follow the approved design (docs/lacite/design/*.dc.html), built
+// (Aktuell, Wird aktualisiert, Pausiert, Fehler) and their list of missing
+// cited keys ("Fehlende ansehen …", import through LocalBib.importBibtex),
+// the three-step dialog "Neue Verbindung" and the section "KI-Assistent
+// verbinden"; and the live session (/lacite/live): what the agent looked up,
+// a hit opening the core's PDF viewer beside the log. Layout, copy and
+// states follow the approved designs (docs/lacite/design/*.dc.html,
+// docs/bib-metadata/design/LaCite*.dc.html), built
 // with the core's own classes (lb-view, lb-page-head, lb-key, lb-input,
 // lb-tabs, lb-set-card) and the --lb-* tokens; everything of its own is
 // `lacite-*` in lacite.css.
@@ -139,6 +143,132 @@ function laciteMissingText(conn) {
     const head = keys.length === 1 ? '1 zitierter Schlüssel fehlt ' + where + ': '
         : keys.length + ' zitierte Schlüssel gibt es nicht ' + where + ': ';
     return { head, keys: shown, rest };
+}
+
+// The groups of GET connections/{id}/missing, in the card's order.
+function laciteMissingGroups(data) {
+    const keys = (data && data.keys) || [];
+    const of = (status) => keys.filter((k) => k.status === status);
+    const found = of('found');
+    const files = [];
+    for (const k of found) {
+        const f = files.find((x) => x.name === k.file);
+        if (f) f.count += 1; else files.push({ name: k.file, count: 1 });
+    }
+    return { found, library: of('library'), notFound: of('not_found'), files };
+}
+
+// "aus literatur_alt.bib (19) · quellen/normen.bib (5)"
+function laciteFilesLine(files) {
+    if (!files.length) return '';
+    if (files.length === 1) return 'aus ' + files[0].name;
+    return 'aus ' + files.map((f) => f.name + ' (' + f.count + ')').join(' · ');
+}
+
+// The name the core's import shows for the handed-over text.
+function laciteImportName(groups, conn) {
+    if (groups.files.length === 1 && groups.files[0].name) return groups.files[0].name.replace(/^.*[\\/]/, '');
+    return 'LaCite – ' + ((conn && conn.name) || 'fehlende Schlüssel') + '.bib';
+}
+
+// The line that still includes an old .bib, as the document writes it.
+function laciteIncludeLine(name, biblatex) {
+    if (biblatex) return '\\addbibresource{' + name + '}';
+    return '\\bibliography{' + String(name).replace(/\.bib$/i, '') + '}';
+}
+
+// ── Live session: pure helpers ──────────────────────────────────────────────
+
+// "S. 12" / "PDF-S. 3" — the printed page when known, else the PDF page,
+// never one made up.
+function laciteHitPage(hit) {
+    if (!hit) return '';
+    if (hit.page_label) return hit.page_label;
+    if (hit.pdf_page) return 'PDF-S. ' + hit.pdf_page;
+    return hit.year ? String(hit.year) : '';
+}
+
+function laciteHits(n) {
+    const value = Number(n) || 0;
+    return value === 0 ? 'keine Treffer' : value + ' Treffer';
+}
+
+// One call as a plain sentence: parts of kind plain | quote | cite | muted | tag | mono.
+function laciteCallParts(entry) {
+    const e = entry || {};
+    const args = e.args || {};
+    const hit = (e.hits && e.hits[0]) || {};
+    const done = !e.error;
+    const quote = (q) => ({ kind: 'quote', text: '„' + (q || '') + '“' });
+    switch (e.tool) {
+    case 'find_passages':
+        return [{ kind: 'plain', text: 'Sucht Textstellen zu ' }, quote(args.query),
+            ...(done ? [{ kind: 'muted', text: ' → ' + laciteHits(e.count) }] : [])];
+    case 'search_library':
+        return [{ kind: 'plain', text: 'Sucht in der Bibliothek nach ' }, quote(args.query),
+            ...(done ? [{ kind: 'muted', text: ' → ' + laciteHits(e.count) }] : [])];
+    case 'read_passages':
+        return [{ kind: 'plain', text: 'Liest um eine Textstelle in ' }, { kind: 'cite', text: args.citekey || hit.citekey || '' },
+            ...(done && e.count ? [{ kind: 'muted', text: ' → ' + e.count + (e.count === 1 ? ' Abschnitt' : ' Abschnitte') }] : [])];
+    case 'get_reference': {
+        const about = [hit.title, hit.year].filter(Boolean).join(', ');
+        return [{ kind: 'plain', text: 'Schlägt ' }, { kind: 'cite', text: args.citekey || hit.citekey || '' },
+            { kind: 'plain', text: ' nach' }, ...(done && about ? [{ kind: 'muted', text: ' → ' + about }] : [])];
+    }
+    case 'add_by_doi':
+        if (done && hit.citekey && !hit.created) {
+            return [{ kind: 'plain', text: 'Findet über DOI ' }, { kind: 'cite', text: hit.citekey },
+                { kind: 'muted', text: ' → schon in der Bibliothek' }];
+        }
+        if (done && hit.citekey) {
+            return [{ kind: 'plain', text: 'Importiert über DOI ' }, { kind: 'tag', text: 'neu' }, { kind: 'cite', text: hit.citekey }];
+        }
+        return [{ kind: 'plain', text: 'Importiert über DOI ' }, { kind: 'mono', text: args.doi || '' }];
+    case 'sync_bib':
+        return [{ kind: 'plain', text: 'Aktualisiert die .bib-Dateien' },
+            ...(done && e.count !== null && e.count !== undefined
+                ? [{ kind: 'muted', text: ' → ' + e.count + (e.count === 1 ? ' Verbindung' : ' Verbindungen') }] : [])];
+    default:
+        return [{ kind: 'plain', text: 'Ruft ' }, { kind: 'mono', text: e.tool || '?' }, { kind: 'plain', text: ' auf' }];
+    }
+}
+
+// Tools whose hits are shown as cards (passages and works one can open).
+const LACITE_HIT_TOOLS = ['find_passages', 'read_passages', 'search_library'];
+
+function laciteTime(iso) {
+    const then = Date.parse(iso || '');
+    if (Number.isNaN(then)) return '';
+    return new Date(then).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function laciteClock(iso) {
+    const then = Date.parse(iso || '');
+    if (Number.isNaN(then)) return '';
+    return new Date(then).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+}
+
+// The passage text for the core's `find`: without the excerpt's "…".
+function laciteFindText(text) {
+    return String(text || '').replace(/\s*…\s*$/, '').trim();
+}
+
+const LACITE_LIVE_STORE = 'lacite.live';
+
+function laciteLoadLive() {
+    try {
+        const raw = window.sessionStorage.getItem(LACITE_LIVE_STORE);
+        const data = raw ? JSON.parse(raw) : null;
+        return data && typeof data === 'object' ? data : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+function laciteSaveLive(state) {
+    try {
+        window.sessionStorage.setItem(LACITE_LIVE_STORE, JSON.stringify(state));
+    } catch (e) { /* private window, blocked storage: the view works without */ }
 }
 
 const LACITE_EXAMPLE_PROMPT = 'Finde in meiner Bibliothek eine Textstelle, die belegt, dass PEM-Elektrolyse bei 80 °C effizienter arbeitet, und zitiere sie mit Seite.';
@@ -554,13 +684,121 @@ const LaCiteDialog = {
 LaCiteDialog.methods.laciteCount = laciteCount;
 LaCiteDialog.methods.laciteErrorText = laciteErrorText;
 
+// ── The missing keys of one card (GET connections/{id}/missing) ─────────────
+
+const LACITE_MISSING_ROWS = 4;
+
+const LaCiteMissing = {
+    components: { LaCiteCopy },
+    props: { conn: { type: Object, required: true }, data: { type: Object, required: true } },
+    data() { return { allFound: false }; },
+    computed: {
+        groups() { return laciteMissingGroups(this.data); },
+        shownFound() { return this.allFound ? this.groups.found : this.groups.found.slice(0, LACITE_MISSING_ROWS); },
+        importCount() { return this.groups.found.length + this.groups.library.length; },
+        // A core before contract 2.6 has no handover: the button stays away.
+        canImport() { return typeof LB.importBibtex === 'function' && !!(this.data.bibtex || '').trim(); },
+        collectionName() {
+            const src = (this.conn.status && this.conn.status.source) || {};
+            return src.kind === 'collection' ? src.name || '' : '';
+        },
+        biblatex() { return !!(this.conn.document && this.conn.document.biblatex); },
+        mainTex() { return (this.conn.document && this.conn.document.main_tex) || 'der Hauptdatei'; },
+        stale() { return this.data.named_bib_files || []; },
+    },
+    methods: {
+        typeLabel(k) { return k.entry_type ? '@' + k.entry_type : ''; },
+        line(name) { return laciteIncludeLine(name, this.biblatex); },
+        stem(name) { return String(name).replace(/\.bib$/i, ''); },
+        runImport() {
+            LB.importBibtex(this.data.bibtex, {
+                collection: this.data.collection_id, filename: laciteImportName(this.groups, this.conn),
+            });
+        },
+        pickOther() {
+            const query = { bibtex: '1' };
+            if (this.data.collection_id !== null && this.data.collection_id !== undefined) query.collection = String(this.data.collection_id);
+            this.$router.push({ path: '/import', query });
+        },
+    },
+    template: `
+<section aria-label="Fehlende Schlüssel" class="lacite-missing" data-testid="lacite-missing">
+  <div v-if="groups.found.length" class="lacite-grp" data-group="found">
+    <div class="lacite-row-between lacite-align-baseline">
+      <h4 class="lacite-h4">In alter .bib gefunden <span class="lacite-count">{{ groups.found.length }}</span></h4>
+      <span class="lb-mono lacite-file">{{ laciteFilesLine(groups.files) }}</span>
+    </div>
+    <div>
+      <div v-for="k in shownFound" :key="k.key" class="lacite-krow">
+        <span class="lb-mono lb-truncate" :title="k.key">{{ k.key }}</span>
+        <span class="lb-truncate lacite-ink2">{{ k.title }}<span v-if="typeLabel(k)" class="lacite-muted"> · {{ typeLabel(k) }}</span></span>
+        <span class="lb-mono lacite-file">{{ k.file }}</span>
+      </div>
+      <button v-if="groups.found.length > shownFound.length" type="button" class="lacite-textaction lacite-flush" @click="allFound = true">Alle {{ groups.found.length }} zeigen</button>
+    </div>
+  </div>
+
+  <div v-if="groups.library.length" class="lacite-grp" data-group="library">
+    <h4 class="lacite-h4">In der Bibliothek, nicht in der Sammlung <span class="lacite-count">{{ groups.library.length }}</span></h4>
+    <div>
+      <div v-for="k in groups.library" :key="k.key" class="lacite-krow">
+        <span class="lb-mono lb-truncate" :title="k.key">{{ k.key }}</span>
+        <span class="lb-truncate lacite-ink2">{{ k.title }}</span>
+        <span></span>
+      </div>
+    </div>
+    <p class="lacite-p lacite-small lacite-muted">Kommen beim Import mit in die Sammlung<template v-if="collectionName"> „{{ collectionName }}“</template>. Doppelt angelegt wird nichts.</p>
+  </div>
+
+  <div v-if="importCount && canImport" class="lacite-row lacite-wrap lacite-import">
+    <button type="button" class="lb-key lb-key-primary" data-testid="lacite-import" @click="runImport">In LocalBib importieren ({{ importCount }})</button>
+    <span class="lacite-small lacite-muted">Du siehst vorher die Vorschau des BibTeX-Imports. Die Schlüssel bleiben genau so.</span>
+  </div>
+
+  <div v-if="groups.notFound.length" class="lacite-grp" data-group="not_found">
+    <h4 class="lacite-h4">Nirgends gefunden <span class="lacite-count">{{ groups.notFound.length }}</span></h4>
+    <div>
+      <div v-for="k in groups.notFound" :key="k.key" class="lacite-krow">
+        <span class="lb-mono lb-truncate" :title="k.key">{{ k.key }}</span>
+        <span class="lacite-muted"><template v-if="k.suggestion">Tippfehler? In der Bibliothek gibt es <span class="lb-mono lacite-ink2">{{ k.suggestion }}</span>.</template></span>
+        <span></span>
+      </div>
+    </div>
+    <div class="lacite-row lacite-wrap">
+      <button type="button" class="lb-key" data-testid="lacite-pick-bib" @click="pickOther">Andere .bib-Datei wählen …</button>
+      <span class="lacite-small lacite-muted">oder im LaTeX-Dokument korrigieren</span>
+    </div>
+  </div>
+
+  <div v-for="name in stale" :key="name" class="lacite-stale" data-testid="lacite-stale">
+    <p class="lacite-p"><b>{{ name }} ist noch eingebunden.</b> Nach dem Import stünden die Schlüssel doppelt da.
+      <template v-if="biblatex">Nimm diese Zeile aus {{ mainTex }} heraus:</template>
+      <template v-else>Nimm {{ stem(name) }} aus der Zeile \\bibliography{…} in {{ mainTex }} heraus:</template></p>
+    <div class="lacite-row">
+      <div class="lacite-code lacite-code-inline">{{ line(name) }}</div>
+      <la-cite-copy :text="line(name)"></la-cite-copy>
+    </div>
+  </div>
+</section>`,
+};
+LaCiteMissing.methods.laciteFilesLine = laciteFilesLine;
+
 // ── One connection card ─────────────────────────────────────────────────────
 
 const LaCiteCard = {
-    components: { LaCiteCopy },
+    components: { LaCiteCopy, LaCiteMissing },
     props: { conn: { type: Object, required: true }, now: { type: Number, default: 0 } },
     emits: ['edit', 'source', 'changed', 'removed', 'toast'],
-    data() { return { confirming: false, confirmOverwrite: false, syncing: false, error: '' }; },
+    data() {
+        return {
+            confirming: false, confirmOverwrite: false, syncing: false, error: '',
+            missingOpen: false, missingData: null, missingLoading: false, missingError: '',
+        };
+    },
+    watch: {
+        // The list follows the card: a sync or an import changes which keys miss.
+        missingSignature() { if (this.missingOpen) this.loadMissing(); },
+    },
     computed: {
         st() { return this.conn.status || {}; },
         pill() { return this.syncing ? { label: 'Wird aktualisiert …', tone: 'soft' } : laciteStatus(this.conn); },
@@ -573,9 +811,27 @@ const LaCiteCard = {
         doc() { return this.conn.document; },
         updated() { return laciteAgo(this.st.last_written || this.st.last_sync, this.now || undefined); },
         missing() { return laciteMissingText(this.conn); },
+        missingSignature() { return ((this.doc && this.doc.missing_keys) || []).join('\n'); },
         errorText() { return laciteErrorText({ code: this.st.error }); },
     },
     methods: {
+        toggleMissing() {
+            this.missingOpen = !this.missingOpen;
+            if (this.missingOpen) this.loadMissing();
+        },
+        async loadMissing() {
+            const ticket = (this._missingTicket = (this._missingTicket || 0) + 1);
+            this.missingLoading = true;
+            this.missingError = '';
+            try {
+                const data = await lcApi('/connections/' + encodeURIComponent(this.conn.id) + '/missing');
+                if (ticket === this._missingTicket) this.missingData = data;
+            } catch (e) {
+                if (ticket === this._missingTicket) this.missingError = laciteErrorText(e);
+            } finally {
+                if (ticket === this._missingTicket) this.missingLoading = false;
+            }
+        },
         async sync(overwrite) {
             this.confirmOverwrite = false;
             this.syncing = true;
@@ -630,10 +886,19 @@ const LaCiteCard = {
     <div class="lacite-code lacite-code-line">{{ doc.snippet_line }}</div>
     <la-cite-copy :text="doc.snippet_line"></la-cite-copy>
   </div>
-  <div v-if="missing && !paused" class="lacite-callout is-warn lacite-small-callout">
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>
-    <span>{{ missing.head }}<template v-for="(k, i) in missing.keys" :key="k"><span class="lb-mono">{{ k }}</span><template v-if="i < missing.keys.length - 1">, </template></template><template v-if="missing.rest"> und {{ missing.rest }} weitere</template> – Tippfehler oder noch nicht importiert?</span>
+  <div v-if="missing && !paused" class="lacite-callout is-warn lacite-small-callout lacite-missing-callout">
+    <span class="lacite-missing-text">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/></svg>
+      <span>{{ missing.head }}<template v-for="(k, i) in missing.keys" :key="k"><span class="lb-mono">{{ k }}</span><template v-if="i < missing.keys.length - 1">, </template></template><template v-if="missing.rest"> und {{ missing.rest }} weitere</template>.</span>
+    </span>
+    <button type="button" class="lacite-textaction lacite-on-warn" data-testid="lacite-missing-toggle"
+            :aria-expanded="missingOpen ? 'true' : 'false'" @click="toggleMissing">{{ missingOpen ? 'Ausblenden' : 'Fehlende ansehen …' }}</button>
   </div>
+  <template v-if="missing && !paused && missingOpen">
+    <p v-if="missingLoading && !missingData" class="lacite-small lacite-muted">Sucht in den .bib-Dateien des Projekts …</p>
+    <p v-else-if="missingError" class="lacite-error" role="alert">{{ missingError }}</p>
+    <la-cite-missing v-else-if="missingData" :conn="conn" :data="missingData"></la-cite-missing>
+  </template>
   <p v-if="sourceGone" class="lacite-p">Die Sammlung „{{ collectionName }}“ wurde gelöscht. Die Datei bleibt so, wie sie war, wird aber nicht mehr aktualisiert. Wähle eine neue Quelle, damit es weitergeht.</p>
   <p v-else-if="paused" class="lacite-p">Die Sammlung gibt es nicht mehr. Die Datei bleibt so, wie sie war, wird aber nicht mehr aktualisiert. Wähle eine neue Quelle, damit es weitergeht.</p>
   <p v-if="foreign" class="lacite-p">In <span class="lb-mono">{{ conn.filename }}</span> fehlt die LaCite-Kopfzeile – die Datei wurde von Hand geändert oder stammt nicht von LaCite. LaCite überschreibt sie erst, wenn du zustimmst.</p>
@@ -745,6 +1010,384 @@ const LaCiteAssistant = {
 </section>`,
 };
 
+// ── The live session (/lacite/live) ─────────────────────────────────────────
+//
+// What the writing agent looked up over MCP, newest on top, live over SSE
+// (GET /events; GET /session on opening and as the fallback while the stream
+// is down). A click on a hit opens the core's PDF viewer beside the log at
+// that spot (LocalBib.components.PdfPreview, contract 2.6) — it does not
+// navigate. Only "Zur Detailansicht" goes to /paper/{id}?page&find&back; the
+// core's back key returns here, and scroll position, the open hit and the
+// viewed hits come back from sessionStorage. A core without PdfPreview gets
+// the detail route straight from the click.
+
+const LACITE_POLL_MS = 5000;
+const LACITE_WIDE_PX = 1100;
+const LACITE_POPUP = 'lacite-live';
+const LACITE_LOOKUP_CHUNK = 40;
+
+function laciteIsPopup() {
+    try {
+        return window.name === LACITE_POPUP;
+    } catch (e) {
+        return false;
+    }
+}
+
+const LACITE_LIVE_COMPONENTS = {};
+if (LB.components && LB.components.PdfPreview) LACITE_LIVE_COMPONENTS.PdfPreview = LB.components.PdfPreview;
+
+const LaCiteLive = {
+    components: LACITE_LIVE_COMPONENTS,
+    data() {
+        return {
+            entries: [], client: null, loading: true, loadError: '', notice: '',
+            ids: {},        // citekey -> { id, has_pdf, missing } (the entry's own or GET /api/papers/lookup)
+            open: null,     // { entry, hit } shown in the PDF pane
+            viewed: {},     // 'entry:hit' -> true
+            pdf: null,      // the viewer's state
+            popup: laciteIsPopup(),
+            clearing: false,
+        };
+    },
+    computed: {
+        hasViewer() { return !!LACITE_LIVE_COMPONENTS.PdfPreview; },
+        newestFirst() { return this.entries.slice().reverse(); },
+        statusLine() {
+            const n = this.entries.length;
+            const calls = n === 1 ? '1 Aufruf' : n + ' Aufrufe';
+            const since = n && laciteClock(this.entries[0].at) ? ' seit ' + laciteClock(this.entries[0].at) : '';
+            const who = this.client && this.client.name ? this.client.name + ' verbunden' : 'Noch kein Agent verbunden';
+            return who + ' · ' + calls + since + ' · nur im Speicher';
+        },
+        cur() {
+            if (!this.open) return null;
+            const entry = this.entries.find((e) => e.id === this.open.entry);
+            const h = entry && entry.hits && entry.hits[this.open.hit];
+            if (!h) return null;
+            const known = this.ids[h.citekey] || {};
+            return {
+                ...h, key: h.citekey, pageText: laciteHitPage(h),
+                paperId: h.paper_id || known.id || null,
+                pdfPage: Number(h.pdf_page) || 1,
+                find: h.pdf_page ? laciteFindText(h.text) : '',
+            };
+        },
+        pdfLine() {
+            const s = this.pdf || {};
+            if (s.page) return 'PDF-S. ' + s.page + (s.pages ? ' / ' + s.pages : '');
+            return this.cur && this.cur.pdf_page ? 'PDF-S. ' + this.cur.pdf_page : '';
+        },
+        pdfNote() {
+            const c = this.cur;
+            const s = this.pdf || {};
+            if (s.status === 'nopdf') return 'zu diesem Eintrag gibt es keine PDF';
+            if (s.status === 'failed') return 'die PDF ließ sich nicht öffnen';
+            const parts = [];
+            if (c && !c.page && c.pdf_page) parts.push('keine gedruckte Seite');
+            if (s.found === true) parts.push('Absatz gefunden');
+            else if (s.found === false) parts.push('nur die Seite – Absatz nicht eindeutig');
+            else if (c && c.find) parts.push('sucht die Stelle …');
+            return parts.join(' · ');
+        },
+    },
+    created() {
+        const saved = laciteLoadLive();
+        if (saved) {
+            for (const k of Array.isArray(saved.viewed) ? saved.viewed : []) this.viewed[k] = true;
+            if (saved.open && typeof saved.open === 'object') this.open = { entry: saved.open.entry, hit: saved.open.hit };
+            this._restoreScroll = Number(saved.scroll) || 0;
+        }
+    },
+    async mounted() {
+        this.listen();
+        await this.load();
+        // An open hit whose call is gone (cleared, restarted) closes.
+        if (this.open && !this.cur) this.open = null;
+        await this.$nextTick();
+        if (this._restoreScroll && this.$refs.log) this.$refs.log.scrollTop = this._restoreScroll;
+        this._restoreScroll = 0;
+    },
+    beforeUnmount() {
+        this.remember();
+        if (this._es) {
+            try { this._es.close(); } catch (e) { /* gone already */ }
+        }
+        this.stopPoll();
+    },
+    methods: {
+        remember() {
+            laciteSaveLive({
+                scroll: this.$refs.log ? this.$refs.log.scrollTop : 0,
+                open: this.open,
+                viewed: Object.keys(this.viewed),
+            });
+        },
+        async load() {
+            try {
+                const out = await lcApi('/session');
+                this.entries = out.entries || [];
+                this.client = out.client || this.client;
+                this.loadError = '';
+                this.resolveFrom(this.entries);
+            } catch (e) {
+                if (!this.entries.length) this.loadError = laciteErrorText(e);
+            } finally {
+                this.loading = false;
+            }
+        },
+        listen() {
+            if (typeof window.EventSource !== 'function') {
+                this.startPoll();
+                return;
+            }
+            try {
+                const es = new window.EventSource(BASE + '/events');
+                this._es = es;
+                es.onmessage = (ev) => {
+                    let msg = null;
+                    try { msg = JSON.parse(ev.data); } catch (e) { return; }
+                    this.onEvent(msg);
+                };
+                // While the stream is down, GET /session every few seconds;
+                // once it is back, one reload catches what was missed.
+                es.onerror = () => this.startPoll();
+                es.onopen = () => {
+                    if (!this._poll) return;
+                    this.stopPoll();
+                    this.load();
+                };
+            } catch (e) {
+                this.startPoll();
+            }
+        },
+        onEvent(msg) {
+            if (!msg || typeof msg !== 'object') return;
+            if (msg.type === 'mcp-call') this.add(msg.entry);
+            else if (msg.type === 'session-cleared') this.resetLocal();
+        },
+        startPoll() {
+            if (this._poll) return;
+            this._poll = setInterval(() => this.load(), LACITE_POLL_MS);
+        },
+        stopPoll() {
+            if (this._poll) clearInterval(this._poll);
+            this._poll = null;
+        },
+        add(entry) {
+            if (!entry || this.entries.some((e) => e.id === entry.id)) return;
+            this.entries.push(entry);
+            if (this.entries.length > 200) this.entries.splice(0, this.entries.length - 200);
+            if (entry.client && entry.client.name) this.client = { ...entry.client, at: entry.at };
+            this.resolveFrom([entry]);
+        },
+        resolveFrom(entries) {
+            const keys = new Set();
+            for (const e of entries) {
+                for (const h of e.hits || []) {
+                    if (!h.citekey) continue;
+                    if (h.paper_id) this.ids[h.citekey] = { id: h.paper_id, has_pdf: h.has_pdf, missing: false };
+                    else if (!(h.citekey in this.ids)) keys.add(h.citekey);
+                }
+            }
+            if (keys.size) return this.resolve([...keys]);
+            return Promise.resolve();
+        },
+        // Item id + PDF of each citekey via the core's lookup (contract, reads only).
+        async resolve(keys) {
+            for (let i = 0; i < keys.length; i += LACITE_LOOKUP_CHUNK) {
+                const chunk = keys.slice(i, i + LACITE_LOOKUP_CHUNK);
+                const params = chunk.map((k) => 'keys=' + encodeURIComponent(k)).join('&');
+                try {
+                    const out = await LB.api('/api/papers/lookup?' + params);
+                    const found = {};
+                    for (const p of (out && out.papers) || []) found[p.cite_key] = p;
+                    for (const k of chunk) {
+                        this.ids[k] = found[k]
+                            ? { id: found[k].id, has_pdf: !!found[k].has_pdf, missing: false }
+                            : { id: null, has_pdf: false, missing: true };
+                    }
+                } catch (e) { /* stays unknown: a click asks again */ }
+            }
+        },
+        showHits(entry) { return LACITE_HIT_TOOLS.includes(entry.tool) && (entry.hits || []).length > 0; },
+        cards(entry) {
+            return (entry.hits || []).map((h, i) => {
+                const known = this.ids[h.citekey] || {};
+                const hasPdf = h.has_pdf === true || h.has_pdf === false ? h.has_pdf : known.has_pdf;
+                const k = entry.id + ':' + i;
+                const isOpen = !!this.open && this.open.entry === entry.id && this.open.hit === i;
+                const seen = !isOpen && !!this.viewed[k];
+                const link = !!h.citekey && hasPdf !== false;
+                let tag = '';
+                if (!link) tag = known.missing ? 'nicht in der Bibliothek' : 'keine PDF';
+                else if (isOpen) tag = 'offen';
+                else if (!h.page && h.pdf_page) tag = 'keine gedruckte Seite';
+                else if (seen) tag = 'angesehen';
+                return { h, i, k, link, isOpen, seen, tag, page: laciteHitPage(h) };
+            });
+        },
+        async idOf(h) {
+            if (h.paper_id) return h.paper_id;
+            if (!(this.ids[h.citekey] || {}).id) await this.resolve([h.citekey]);
+            return (this.ids[h.citekey] || {}).id || null;
+        },
+        async openHit(entry, i) {
+            const h = entry.hits[i];
+            this.notice = '';
+            const paperId = await this.idOf(h);
+            if (!paperId) {
+                this.notice = h.citekey + ' gibt es nicht (mehr) in der Bibliothek.';
+                return;
+            }
+            this.viewed[entry.id + ':' + i] = true;
+            if (!this.hasViewer) {   // a core before contract 2.6: the detail view instead
+                this.goDetail(paperId, h);
+                return;
+            }
+            this.open = { entry: entry.id, hit: i };
+            this.pdf = null;
+            this.widen();
+            this.remember();
+        },
+        closePdf() {
+            this.open = null;
+            this.pdf = null;
+            this.remember();
+        },
+        onPdfState(state) { this.pdf = state; },
+        toDetail() {
+            const c = this.cur;
+            if (c && c.paperId) this.goDetail(c.paperId, c);
+        },
+        goDetail(paperId, h) {
+            const query = {};
+            if (h.pdf_page) {
+                query.page = String(h.pdf_page);
+                const find = laciteFindText(h.text);
+                if (find) query.find = find;
+            }
+            query.back = '/lacite/live';
+            this.remember();
+            this.$router.push({ path: `/paper/${paperId}`, query });
+        },
+        // The PDF needs room: a narrow popup grows once (a browser may refuse).
+        widen() {
+            if (!this.popup || this._widened) return;
+            this._widened = true;
+            try {
+                if (window.innerWidth < LACITE_WIDE_PX) {
+                    window.resizeTo(Math.max(1180, window.outerWidth || 0), window.outerHeight || 900);
+                }
+            } catch (e) { /* not ours to resize */ }
+        },
+        openWindow() {
+            try {
+                const url = window.location.origin + window.location.pathname + '#/lacite/live';
+                window.open(url, LACITE_POPUP, 'popup=yes,width=480,height=900');
+            } catch (e) { /* blocked: the page works here as well */ }
+        },
+        async clear() {
+            this.clearing = true;
+            try {
+                await lcApi('/session', { method: 'DELETE' });
+                this.resetLocal();
+            } catch (e) {
+                this.notice = laciteErrorText(e);
+            } finally {
+                this.clearing = false;
+            }
+        },
+        resetLocal() {
+            this.entries = [];
+            this.open = null;
+            this.viewed = {};
+            this.pdf = null;
+            this.remember();
+        },
+    },
+    template: `
+<div class="lacite-live" :class="{ 'has-open': !!cur, 'is-popup': popup }" data-testid="lacite-live">
+  <div class="lacite-live-log">
+    <header class="lacite-live-head">
+      <div class="lacite-row-between">
+        <div class="lb-eyebrow">LaCite · Live</div>
+        <div class="lacite-actions">
+          <button v-if="!popup" type="button" class="lb-key lacite-key-sm" data-testid="lacite-live-window" @click="openWindow">Im eigenen Fenster öffnen</button>
+          <button type="button" class="lb-key lacite-key-sm" data-testid="lacite-live-clear" :disabled="clearing || !entries.length" @click="clear">Sitzung leeren</button>
+        </div>
+      </div>
+      <h1 class="lacite-live-title">Was der Agent nachschlägt</h1>
+      <p class="lacite-live-status"><span class="lacite-live-dot" :class="{ 'is-on': client && client.name }" aria-hidden="true"></span>{{ statusLine }}</p>
+    </header>
+    <div ref="log" class="lacite-live-scroll" data-testid="lacite-live-log">
+      <p v-if="notice" class="lacite-error lacite-live-notice" role="alert">{{ notice }}</p>
+      <p v-if="loading" class="lacite-muted lacite-live-none">Lädt …</p>
+      <p v-else-if="loadError" class="lacite-error lacite-live-none" role="alert">{{ loadError }}</p>
+      <p v-else-if="!entries.length" class="lacite-muted lacite-live-none">Noch keine Aufrufe. Sobald dein Assistent über LaCite nachschlägt, steht es hier – mit jeder Fundstelle.</p>
+      <section v-for="entry in newestFirst" :key="entry.id" class="lacite-call" :data-entry="entry.id">
+        <span class="lb-mono lacite-call-time">{{ laciteTime(entry.at) }}</span>
+        <div class="lacite-call-body">
+          <p class="lacite-call-text"><span v-for="(part, pi) in laciteCallParts(entry)" :key="pi" :class="'lacite-part-' + part.kind">{{ part.text }}</span></p>
+          <p v-if="entry.error" role="status" class="lacite-call-error">Fehler: {{ entry.error }}</p>
+          <template v-if="showHits(entry)">
+            <template v-for="c in cards(entry)" :key="c.k">
+              <button v-if="c.link" type="button" class="lacite-hit" :class="{ 'is-open': c.isOpen, 'is-seen': c.seen }"
+                      :aria-pressed="c.isOpen ? 'true' : 'false'" :data-hit="c.k" @click="openHit(entry, c.i)">
+                <span class="lacite-hit-head">
+                  <span class="lacite-cite">{{ c.h.citekey }}<span v-if="c.page" class="lacite-hit-page"> · {{ c.page }}</span></span>
+                  <span class="lb-mono lacite-hit-tag">{{ c.tag }}</span>
+                </span>
+                <span v-if="c.h.text || c.h.title" class="lacite-excerpt">{{ c.h.text || c.h.title }}</span>
+              </button>
+              <div v-else class="lacite-hit is-off" :data-hit="c.k">
+                <span class="lacite-hit-head">
+                  <span class="lacite-cite">{{ c.h.citekey }}<span v-if="c.page" class="lacite-hit-page"> · {{ c.page }}</span></span>
+                  <span class="lb-mono lacite-hit-tag">{{ c.tag }}</span>
+                </span>
+                <span v-if="c.h.text || c.h.title" class="lacite-excerpt">{{ c.h.text || c.h.title }}</span>
+              </div>
+            </template>
+          </template>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section v-if="cur" class="lacite-live-pane" aria-label="Fundstelle" data-testid="lacite-live-pdf">
+    <div class="lacite-pane">
+      <header class="lacite-pane-head">
+        <div class="lacite-pane-title">
+          <span class="lacite-cite">{{ cur.key }}<span v-if="cur.pageText" class="lacite-hit-page"> · {{ cur.pageText }}</span></span>
+          <span class="lacite-pane-work lb-truncate" :title="cur.title">{{ cur.title }}</span>
+        </div>
+        <div class="lacite-actions">
+          <button type="button" class="lb-key" data-testid="lacite-to-detail" :disabled="!cur.paperId" @click="toDetail">Zur Detailansicht
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
+          <button type="button" class="lb-key lb-key-icon" aria-label="PDF schließen" title="PDF schließen" data-testid="lacite-pdf-close" @click="closePdf">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+      </header>
+      <div class="lacite-pane-bar">
+        <span class="lb-mono">{{ pdfLine }}</span>
+        <span class="lb-mono">{{ pdfNote }}</span>
+      </div>
+      <div class="lacite-pane-body">
+        <pdf-preview v-if="cur.paperId" :key="cur.paperId" :paper-id="cur.paperId" :page="cur.pdfPage" :find="cur.find" @state="onPdfState"></pdf-preview>
+      </div>
+    </div>
+  </section>
+  <div v-else class="lacite-live-empty">
+    <span class="lacite-live-empty-mark" aria-hidden="true">[ ]</span>
+    <span>Klick auf einen Treffer, dann öffnet sich die PDF hier an der Stelle.</span>
+  </div>
+</div>`,
+};
+LaCiteLive.methods.laciteTime = laciteTime;
+LaCiteLive.methods.laciteCallParts = laciteCallParts;
+
 // ── The page ─────────────────────────────────────────────────────────────────
 
 const LaCiteHome = {
@@ -816,6 +1459,7 @@ const LaCiteHome = {
     <div class="lb-page-head-r">
       <button type="button" class="lb-key lb-key-icon lacite-help" aria-label="Anleitung anzeigen" title="Anleitung anzeigen"
               :aria-pressed="showTutorial" @click="tutorial = !tutorial">?</button>
+      <router-link to="/lacite/live" class="lb-key" data-testid="lacite-live-link">Live-Sitzung</router-link>
       <button v-if="!showTutorial" type="button" class="lb-key lb-key-primary" @click="openNew">+ Neue Verbindung</button>
     </div>
   </header>
@@ -845,10 +1489,13 @@ const LaCiteHome = {
 window.laCitePure = {
     laciteCount, laciteAgo, laciteStatus, laciteSourceLabel, laciteMcpUrl,
     laciteAssistantSnippet, laciteMissingText, laciteErrorText, LACITE_ERROR_TEXT,
+    laciteMissingGroups, laciteFilesLine, laciteImportName, laciteIncludeLine,
+    laciteHitPage, laciteCallParts, laciteFindText,
 };
 
 LB.registerPlugin({
     id: 'lacite',
-    views: { 'lacite.home': LaCiteHome },
+    views: { 'lacite.home': LaCiteHome, 'lacite.live': LaCiteLive },
+    subroutes: [{ path: '/lacite/live', view: 'lacite.live' }],
 });
 })();

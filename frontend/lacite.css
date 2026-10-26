@@ -12,6 +12,7 @@
 .lacite-lede .lb-mono { font-size: 14px; }
 .lacite-help { font-family: var(--lb-font-serif); font-size: 17px; }
 .lacite-help[aria-pressed="true"] { background: var(--lb-bg-soft); color: var(--lb-ink); }
+.lacite-head a.lb-key { text-decoration: none; }
 
 /* the core page gets border-box from its preflight; say it here too */
 .lacite-view *, .lacite-overlay * { box-sizing: border-box; }
@@ -206,6 +207,134 @@
   font: inherit; color: var(--lb-accent);
 }
 .lacite-link:hover { color: var(--lb-accent-ink); text-decoration: underline; }
+
+/* the missing keys of a card ("Fehlende ansehen …") */
+.lacite-missing-callout { justify-content: space-between; align-items: flex-start; }
+.lacite-missing-text { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.lacite-textaction {
+  appearance: none; flex: none; border: 0; background: transparent; cursor: pointer;
+  padding: 4px 6px; border-radius: 6px;
+  font: inherit; font-size: 12.5px; font-weight: 500; color: var(--lb-accent);
+}
+.lacite-textaction:hover { background: var(--lb-accent-soft); color: var(--lb-accent-ink); }
+.lacite-textaction:focus-visible { outline: 2px solid var(--lb-accent); outline-offset: 2px; }
+.lacite-textaction.lacite-on-warn { color: var(--lb-accent-ink); }
+.lacite-textaction.lacite-flush { padding-left: 0; }
+.lacite-missing { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 0; }
+.lacite-grp { border-top: 1px solid var(--lb-hairline); padding: 12px 0 2px; display: flex; flex-direction: column; gap: 8px; }
+.lacite-h4 { margin: 0; font-size: 13.5px; font-weight: 500; color: var(--lb-ink); }
+.lacite-count { font-family: var(--lb-font-mono); font-size: 11px; font-weight: 400; color: var(--lb-ink-3); }
+.lacite-align-baseline { align-items: baseline; }
+.lacite-file { font-size: 11px; color: var(--lb-ink-3); }
+.lacite-ink2 { color: var(--lb-ink-2); }
+.lacite-krow {
+  display: grid; grid-template-columns: 200px minmax(0, 1fr) auto; gap: 14px; align-items: baseline;
+  padding: 3px 0; font-size: 13px;
+}
+.lacite-krow .lb-mono { font-size: 12px; }
+.lacite-krow .lacite-file { font-size: 11px; }
+.lacite-import { padding: 6px 0 4px; }
+.lacite-stale {
+  display: flex; flex-direction: column; gap: 8px; margin-top: 8px;
+  border: 1px dashed var(--lb-hairline-2); border-radius: 10px; padding: 12px 14px;
+}
+.lacite-stale b { font-weight: 500; }
+.lacite-code-inline { padding: 6px 12px; }
+
+/* the live session (/lacite/live): the log, and the PDF beside it */
+.lacite-live {
+  display: flex; height: 100vh; min-height: 480px; position: sticky; top: 0;
+  background: var(--lb-bg); color: var(--lb-ink); font-size: 13.5px; line-height: 1.5;
+}
+.lacite-live *, .lacite-live *::before { box-sizing: border-box; }
+.lacite-live-log {
+  flex: 0 0 440px; min-width: 0; display: flex; flex-direction: column;
+  border-right: 1px solid var(--lb-hairline);
+}
+.lacite-live-head {
+  flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 16px 18px 12px; border-bottom: 1px solid var(--lb-hairline);
+}
+.lacite-live-head .lb-eyebrow { margin: 0; }
+.lb-key.lacite-key-sm { height: 32px; padding: 0 12px; }
+.lacite-live-title {
+  margin: 0; font-family: var(--lb-font-serif); font-size: 24px; font-weight: 500;
+  letter-spacing: -.01em; color: var(--lb-ink);
+}
+.lacite-live-status { margin: 0; display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--lb-ink-3); }
+.lacite-live-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--lb-mute); }
+.lacite-live-dot.is-on { background: var(--lb-ok); }
+.lacite-live-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 18px 24px; }
+.lacite-live-none { margin: 0; padding: 18px 0; font-size: 13px; max-width: 46ch; }
+.lacite-live-notice { padding-top: 12px; }
+.lacite-call {
+  display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 10px;
+  padding: 14px 0; border-top: 1px solid var(--lb-hairline);
+}
+.lacite-call:first-of-type { border-top: 0; }
+.lacite-call-time { font-size: 11.5px; color: var(--lb-ink-3); padding-top: 1px; }
+.lacite-call-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.lacite-call-text { margin: 0; color: var(--lb-ink); overflow-wrap: anywhere; }
+.lacite-part-quote { font-family: var(--lb-font-serif); font-style: italic; font-size: 14.5px; }
+.lacite-part-muted { color: var(--lb-ink-3); }
+.lacite-part-mono { font-family: var(--lb-font-mono); font-size: 11.5px; }
+.lacite-part-cite, .lacite-cite { font-family: var(--lb-font-mono); font-size: 11.5px; font-weight: 500; color: var(--lb-ink); }
+.lacite-part-tag {
+  display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 3px;
+  font-family: var(--lb-font-mono); font-size: 10.5px; background: var(--lb-accent-soft); color: var(--lb-accent-ink);
+}
+.lacite-call-error { margin: 0; font-size: 12.5px; color: var(--lb-danger); }
+.lacite-hit {
+  appearance: none; display: flex; flex-direction: column; gap: 4px; width: 100%;
+  padding: 9px 11px; border: 1px solid var(--lb-hairline); border-radius: 10px;
+  background: var(--lb-bg-elev); text-align: left; font: inherit; color: inherit; cursor: pointer;
+  transition: border-color var(--lb-dur-2) var(--lb-ease-out), box-shadow var(--lb-dur-2) var(--lb-ease-out);
+}
+.lacite-hit:hover { border-color: var(--lb-hairline-2); box-shadow: 0 1px 0 var(--lb-hairline-2); }
+.lacite-hit:focus-visible { outline: 2px solid var(--lb-accent); outline-offset: 2px; }
+.lacite-hit.is-seen { background: transparent; }
+.lacite-hit.is-open { background: var(--lb-accent-soft); border-color: var(--lb-accent-soft); }
+.lacite-hit.is-open .lacite-cite { color: var(--lb-accent-ink); }
+.lacite-hit.is-off { border-style: dashed; background: transparent; cursor: default; box-shadow: none; }
+.lacite-hit.is-off .lacite-cite { color: var(--lb-ink-2); }
+.lacite-hit.is-off .lacite-excerpt { color: var(--lb-ink-3); }
+.lacite-hit-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.lacite-hit-page { color: var(--lb-ink-3); font-weight: 400; }
+.lacite-hit-tag { flex: none; font-size: 10.5px; color: var(--lb-ink-3); }
+.lacite-excerpt {
+  margin: 0; font-family: var(--lb-font-serif); font-size: 14px; line-height: 1.45; color: var(--lb-ink-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lacite-live-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 12px; }
+.lacite-pane {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+  background: var(--lb-bg-elev); border-radius: 12px; box-shadow: var(--lb-shadow-lg);
+}
+.lacite-pane-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px 10px 16px; border-bottom: 1px solid var(--lb-hairline);
+}
+.lacite-pane-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.lacite-pane-work { font-family: var(--lb-font-serif); font-style: italic; font-size: 14px; color: var(--lb-ink-2); }
+.lacite-pane-bar {
+  flex: none; display: flex; justify-content: space-between; gap: 12px; padding: 6px 16px;
+  border-bottom: 1px solid var(--lb-hairline); font-size: 11.5px; color: var(--lb-ink-3);
+}
+.lacite-pane-body { flex: 1; min-height: 0; display: flex; position: relative; background: var(--lb-bg-soft); }
+.lacite-live-empty {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; align-items: center; justify-content: center;
+  padding: 40px; text-align: center; font-size: 13px; color: var(--lb-ink-3);
+}
+.lacite-live-empty > span:last-child { max-width: 38ch; }
+.lacite-live-empty-mark { font-family: var(--lb-font-serif); font-style: italic; font-size: 56px; line-height: 1; color: var(--lb-mute); }
+/* A narrow window (the popup beside the editor) is the log alone until a hit opens. */
+@media (max-width: 899px) {
+  .lacite-live-empty { display: none; }
+  .lacite-live:not(.has-open) .lacite-live-log { flex: 1 1 auto; border-right: 0; }
+  /* the window refused to grow: log and PDF share what there is */
+  .lacite-live.has-open .lacite-live-log { flex: 0 0 42%; }
+}
+@media (prefers-reduced-motion: reduce) { .lacite-hit { transition: none; } }
 
 .lacite-toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 110;

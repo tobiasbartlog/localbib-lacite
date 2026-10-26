@@ -14,13 +14,19 @@ the suggestion says that no printed page is known. The 2.5 methods are
 guarded with ``getattr``: on an older host ``find_passages`` and
 ``read_passages`` are simply not listed. ``add_by_doi`` without
 ``library.write`` is a tool error (``isError: true``), never a crash.
+
+Every ``tools/call`` — answer or tool error — goes to the live session log
+(``log``, see ``session_log``) on its way out; the log cannot fail the call.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
+
+from lacite import session_log
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 SERVER_NAME = "localbib-lacite"
@@ -65,6 +71,13 @@ def _int(args: dict, name: str, default: int, lo: int, hi: int) -> int:
     except (TypeError, ValueError):
         raise ToolError(f"'{name}' must be an integer") from None
     return max(lo, min(hi, value))
+
+
+def _note(known: dict, citekey: Any, paper_id: Any, has_pdf: Any) -> None:
+    """Remember an Item id the tool's own answer already had, for the log."""
+    if citekey and paper_id is not None:
+        known[str(citekey)] = {"paper_id": paper_id,
+                               "has_pdf": bool(has_pdf) if has_pdf is not None else None}
 
 
 def _str(args: dict, name: str) -> str:
@@ -117,14 +130,17 @@ class McpServer:
     """Dispatch over one Add-on's ``LibraryApi``.
 
     ``sync_all`` is the engine's "sync every connection now" (for
-    ``sync_bib`` and after ``add_by_doi``); ``version`` is the Bundle's."""
+    ``sync_bib`` and after ``add_by_doi``); ``version`` is the Bundle's;
+    ``log`` gets one ``session_log`` entry per tool call (the live session)."""
 
     def __init__(self, library: Any, *, sync_all: Optional[Callable[[], list]] = None,
-                 version: str = "0", clock: Callable[[], str] = _now) -> None:
+                 version: str = "0", clock: Callable[[], str] = _now,
+                 log: Optional[Callable[[dict], None]] = None) -> None:
         self.library = library
         self.sync_all = sync_all
         self.version = version
         self._clock = clock
+        self.log = log  # SessionLog.record: one entry per tools/call
         self.last_client: Optional[dict] = None
 
     # --- tool table --------------------------------------------------------
@@ -189,17 +205,19 @@ class McpServer:
         return out
 
     # --- tool bodies -------------------------------------------------------
-    def _search_library(self, args: dict) -> dict:
+    def _search_library(self, args: dict, known: dict) -> dict:
         query = _str(args, "query")
         limit = _int(args, "limit", 10, 1, 50)
         hits = self.library.search_references(query, limit)
+        for h in hits[:limit]:
+            _note(known, h.get("citekey"), h.get("id"), h.get("has_pdf"))
         return {"results": [{
             "citekey": h.get("citekey"), "title": h.get("title") or "",
             "authors": h.get("authors") or "", "year": h.get("year"),
             "abstract_excerpt": _excerpt(h.get("abstract")),
         } for h in hits[:limit]]}
 
-    def _find_passages(self, args: dict) -> dict:
+    def _find_passages(self, args: dict, known: dict) -> dict:
         query = _str(args, "query")
         limit = _int(args, "limit", 5, 1, 20)
         results = []
@@ -210,7 +228,7 @@ class McpServer:
                             "score": p.get("score")})
         return {"results": results}
 
-    def _read_passages(self, args: dict) -> dict:
+    def _read_passages(self, args: dict, known: dict) -> dict:
         key = _str(args, "citekey")
         offset = _int(args, "offset", 0, 0, 1_000_000)
         limit = _int(args, "limit", 5, 1, 30)
@@ -228,16 +246,17 @@ class McpServer:
                            if abstract else "Kein Volltext und kein Abstract verfügbar.")
         return out
 
-    def _get_reference(self, args: dict) -> dict:
+    def _get_reference(self, args: dict, known: dict) -> dict:
         key = _str(args, "citekey")
         ref = self.library.get_reference(key)
         if ref is None:
             raise ToolError(f"Unknown citekey: {key}")
+        _note(known, ref.get("citekey") or key, ref.get("id"), ref.get("has_pdf"))
         keep = ("citekey", "title", "authors", "year", "journal", "doi", "volume", "issue",
                 "pages", "abstract", "has_pdf")
         return {**{k: ref.get(k) for k in keep}, "cite": f"\\cite{{{ref.get('citekey') or key}}}"}
 
-    def _add_by_doi(self, args: dict) -> dict:
+    def _add_by_doi(self, args: dict, known: dict) -> dict:
         doi = _str(args, "doi")
         try:
             result = self.library.create_by_doi(doi)
@@ -246,13 +265,14 @@ class McpServer:
                             "is not granted).") from None
         except ValueError as exc:
             raise ToolError(f"Could not add DOI {doi}: {exc}") from None
+        _note(known, result.get("citekey"), result.get("paper_id"), None)
         if result.get("created") and self.sync_all is not None:
             self.sync_all()
         return {"doi": result.get("doi"), "created": bool(result.get("created")),
                 "citekey": result.get("citekey"), "pdf": result.get("pdf"),
                 "cite": f"\\cite{{{result.get('citekey')}}}"}
 
-    def _sync_bib(self, args: dict) -> dict:
+    def _sync_bib(self, args: dict, known: dict) -> dict:
         results = self.sync_all() if self.sync_all is not None else []
         return {"connections": [{
             "name": r.get("name"), "state": r.get("state"), "entries": r.get("entries"),
@@ -275,14 +295,31 @@ class McpServer:
             raise LookupError(name)
         if args is None:
             args = {}
+        started = time.perf_counter()
+        known: dict = {}
         if not isinstance(args, dict):
-            return _tool_error("'arguments' must be an object")
+            return self._logged(name, args, None, "'arguments' must be an object", started, known)
         try:
-            data = getattr(self, self._BODIES[name])(args)
+            data = getattr(self, self._BODIES[name])(args, known)
         except ToolError as exc:
-            return _tool_error(str(exc))
+            return self._logged(name, args, None, str(exc), started, known)
         except Exception as exc:  # the library failed: tell the agent, keep serving
-            return _tool_error(f"{name} failed: {exc}")
+            return self._logged(name, args, None, f"{name} failed: {exc}", started, known)
+        return self._logged(name, args, data, None, started, known)
+
+    def _logged(self, name: str, args: Any, data: Optional[dict], error: Optional[str],
+                started: float, known: dict) -> dict:
+        """The call's answer, after handing it to the session log. The log
+        never raises into the call and only queues (``session_log``)."""
+        if self.log is not None:
+            try:
+                self.log(session_log.summarize(
+                    name, args, data, error=error, client=self.last_client, at=self._clock(),
+                    duration_ms=round((time.perf_counter() - started) * 1000), known=known))
+            except Exception:
+                pass
+        if error is not None:
+            return _tool_error(error)
         return {"content": [{"type": "text", "text": json.dumps(data, ensure_ascii=False, indent=1)}],
                 "structuredContent": data, "isError": False}
 

@@ -241,6 +241,87 @@ class Engine:
     def views(self) -> list[dict]:
         return [self.view(c) for c in self.connections()]
 
+    def _reference(self, key: str) -> Optional[dict]:
+        try:
+            return self.library.get_reference(key)
+        except Exception as exc:  # one broken lookup must not lose the list
+            logger.warning("LaCite: %s nicht nachgeschlagen: %s", key, exc)
+            return None
+
+    def _library_bib(self) -> str:
+        try:
+            return self.library.export_bibtex() or ""
+        except Exception as exc:
+            logger.warning("LaCite: Bibliothek nicht exportiert: %s", exc)
+            return ""
+
+    def missing(self, conn: dict) -> dict:
+        """Where the connection's missing cited keys can come from; reads
+        only, writes nothing, never raises for the disk.
+
+        Each key is ``library`` (the library holds it — the source does not,
+        e.g. an Item outside the Collection), ``found`` (an entry with exactly
+        this key in another ``.bib`` of the project: the named ones first,
+        then the others up to three levels, never the connection's own file)
+        or ``not_found``. ``bibtex`` holds the entries of the first two
+        groups — ``found`` cut from the old file, ``library`` from the
+        library's own export, so the core's import matches it instead of
+        creating it again — ready for ``LocalBib.importBibtex``. A ``found``
+        key carries the old entry's ``title`` and ``entry_type`` for the list,
+        a ``not_found`` one a ``suggestion``: a library key it is probably a
+        typo of (:func:`texcheck.suggest_key`), else ``None``. Missing keys
+        are known only while the connection is ``ok`` (``available``)."""
+        view = self.view(conn)
+        doc = view.get("document") or {}
+        available = view["status"]["state"] == STATE_OK and bool(doc)
+        keys = list(doc.get("missing_keys") or []) if available else []
+        source = conn["source"]
+        target = sync.target_path(conn["folder"], conn["filename"])
+        named = texcheck.resolve_named(conn["folder"], doc.get("bib_files") or [],
+                                       main_tex=doc.get("main_tex"))
+        named = [(n, p) for n, p in named if not texcheck.same_file(p, target)]
+        refs = {key: self._reference(key) for key in keys}
+        lookup = [k for k in keys if refs[k] is None]
+        bibs = (texcheck.read_bibs(texcheck.bib_paths(conn["folder"], named, exclude=target))
+                if lookup else ())
+        found = texcheck.find_entries(lookup, bibs)
+        old_files = dict(found["found"])  # key -> old .bib, before the library's own join in
+        in_library = [k for k in keys if refs[k] is not None]
+        nowhere = [k for k in lookup if k not in old_files]
+        library_bib = self._library_bib() if (in_library or nowhere) else ""
+        if in_library:
+            own = texcheck.find_entries(in_library, [("", library_bib)])
+            for key in own["found"]:
+                found["found"][key] = ""
+                found["entries"][key] = own["entries"][key]
+        library_keys = sync.bib_keys(library_bib) if nowhere else []
+        items = []
+        for key in keys:
+            ref = refs[key]
+            if ref is not None:
+                items.append({"key": key, "status": "library", "file": None,
+                              "item_id": ref.get("id"), "title": ref.get("title") or "",
+                              "entry_type": "", "suggestion": None})
+            elif key in old_files:
+                info = texcheck.entry_info(found["entries"].get(key, ""))
+                items.append({"key": key, "status": "found", "file": old_files[key],
+                              "item_id": None, "title": info["title"],
+                              "entry_type": info["type"], "suggestion": None})
+            else:
+                items.append({"key": key, "status": "not_found", "file": None,
+                              "item_id": None, "title": "", "entry_type": "",
+                              "suggestion": texcheck.suggest_key(key, library_keys)})
+        counts = {s: sum(1 for i in items if i["status"] == s) for s in ("found", "library", "not_found")}
+        return {
+            "id": conn["id"],
+            "available": available,
+            "collection_id": source.get("id") if source.get("kind") == "collection" else None,
+            "keys": items,
+            "counts": counts,
+            "named_bib_files": [n for n, _ in named],
+            "bibtex": texcheck.excerpt(found, keys),
+        }
+
     # --- writes to the list ----------------------------------------------------
     def _check(self, conn: dict, others: list[dict]) -> None:
         conns.check_unique(conn, others)

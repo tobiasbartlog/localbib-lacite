@@ -8,10 +8,15 @@
   PUT    /connections/{id}             edit (name, folder, file name, source)
   DELETE /connections/{id}             "Trennen": the connection goes, the file stays
   POST   /connections/{id}/sync        "Jetzt aktualisieren" (``overwrite`` after asking)
+  GET    /connections/{id}/missing     the missing cited keys: in an old .bib / in the library / nowhere,
+                                       plus the BibTeX text for the core's import (reads only)
   POST   /sync                         sync every connection now
   POST   /connections/{id}/open-folder the project folder in the file manager
   POST   /pick-folder                  the native folder dialog (or ``error.lacite.picker_unavailable``)
   POST   /mcp                          the MCP endpoint (Streamable HTTP, JSON answers)
+  GET    /session                      the live session: the last MCP tool calls (in memory)
+  DELETE /session                      "Sitzung leeren"
+  GET    /events                       SSE: ``{"type": "mcp-call", "entry"}`` per tool call
 
 Errors are codes (``{"detail": {"code": "error.lacite.…"}}``), never sentences.
 Blocking work (disk, library export, dialogs) runs in sync handlers, i.e. in
@@ -25,12 +30,14 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from lacite import connections as conns
-from lacite import desktop, engine as engine_mod, sync, texcheck
+from lacite import desktop, engine as engine_mod, session_log, sync, texcheck
+from lacite.events import EventBroadcaster
 from lacite.mcp import PARSE_ERROR, McpServer, _error
+from lacite.session_log import SessionLog
 
 PREFIX = "/api/plugins/lacite"
 
@@ -63,7 +70,15 @@ def _fail(status: int, code: str, **params: Any) -> HTTPException:
     return HTTPException(status_code=status, detail=detail)
 
 
-def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str) -> APIRouter:
+async def sse_stream(events: EventBroadcaster):
+    """The ``/events`` body: one ``data:`` line per event, until ``close()``."""
+    async for event in events.subscribe():
+        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+
+def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str,
+                 session: Optional[SessionLog] = None,
+                 events: Optional[EventBroadcaster] = None) -> APIRouter:
     router = APIRouter(prefix=PREFIX)
 
     def _found(conn_id: str) -> dict:
@@ -137,6 +152,10 @@ def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str) -
             raise _fail(404, "error.lacite.connection_not_found")
         return {"sync": result, "connection": engine.view(conn)}
 
+    @router.get("/connections/{conn_id}/missing")
+    def missing_keys(conn_id: str) -> dict:
+        return engine.missing(_found(conn_id))
+
     @router.post("/sync")
     def sync_all() -> dict:
         return {"results": engine.sync_all(force=True)}
@@ -174,6 +193,27 @@ def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str) -
         if answer is None:
             return Response(status_code=202)
         return JSONResponse(answer)
+
+    # --- Live session (what the agent looked up) -----------------------------
+    @router.get("/session")
+    def session_entries() -> dict:
+        return {"entries": session.entries() if session is not None else [],
+                "limit": session_log.LIMIT, "client": mcp.last_client}
+
+    @router.delete("/session")
+    def session_clear() -> dict:
+        if session is not None:
+            session.clear()
+        return {"entries": []}
+
+    @router.get("/events")
+    async def session_events() -> Response:
+        """SSE: ``{"type": "mcp-call", "entry"}`` per tool call,
+        ``{"type": "session-cleared"}`` after "Sitzung leeren"."""
+        if events is None:
+            return Response(status_code=404)
+        return StreamingResponse(sse_stream(events), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @router.get("/mcp")
     def mcp_get() -> Response:

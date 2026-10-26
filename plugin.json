@@ -1,7 +1,7 @@
 {
   "id": "lacite",
   "name": "LaCite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "LocalBib",
   "license": "AGPL-3.0-only",
   "tagline": "Deine Bibliothek in deinem LaTeX-Editor: .bib-Datei und KI-Zitate mit Seite.",
