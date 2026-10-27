@@ -29,6 +29,7 @@ const BASE = '/api/plugins/lacite';
 const REFRESH_MS = 15000;
 
 const LACITE_ERROR_TEXT = {
+    'error.lacite.report_not_found': 'Diesen Bericht gibt es nicht mehr.',
     'error.lacite.folder_required': 'Bitte wähle einen Ordner.',
     'error.lacite.folder_not_absolute': 'Bitte gib den vollständigen Pfad an, z. B. C:\\Users\\…\\Dissertation.',
     'error.lacite.folder_missing': 'Diesen Ordner gibt es nicht (mehr). Wurde er verschoben oder umbenannt?',
@@ -224,6 +225,9 @@ function laciteCallParts(entry) {
             return [{ kind: 'plain', text: 'Importiert über DOI ' }, { kind: 'tag', text: 'neu' }, { kind: 'cite', text: hit.citekey }];
         }
         return [{ kind: 'plain', text: 'Importiert über DOI ' }, { kind: 'mono', text: args.doi || '' }];
+    case 'submit_report':
+        return [{ kind: 'tag', text: 'Bericht' },
+            { kind: 'plain', text: done ? 'Schlussbericht abgegeben' : 'Gibt einen Schlussbericht ab' }];
     case 'sync_bib':
         return [{ kind: 'plain', text: 'Aktualisiert die .bib-Dateien' },
             ...(done && e.count !== null && e.count !== undefined
@@ -251,6 +255,121 @@ function laciteClock(iso) {
 // The passage text for the core's `find`: without the excerpt's "…".
 function laciteFindText(text) {
     return String(text || '').replace(/\s*…\s*$/, '').trim();
+}
+
+// ── Schlussberichte: pure helpers ───────────────────────────────────────────
+
+// "heute, 14:32" / "22. Okt., 10:05" (now injectable for tests).
+function laciteWhen(iso, now) {
+    const then = Date.parse(iso || '');
+    if (Number.isNaN(then)) return '';
+    const d = new Date(then);
+    const today = new Date(now === undefined ? Date.now() : now);
+    const time = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    if (d.toDateString() === today.toDateString()) return 'heute, ' + time;
+    const opts = { day: 'numeric', month: 'short' };
+    if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString('de-DE', opts) + ', ' + time;
+}
+
+const LACITE_STATUS = {
+    supported: { label: 'Belegt', cls: 'is-ok' },
+    check: { label: 'Prüfen', cls: 'is-warn' },
+    unsupported: { label: 'Ohne Beleg', cls: 'is-none' },
+};
+
+function laciteReportStatus(status) {
+    return LACITE_STATUS[status] || LACITE_STATUS.unsupported;
+}
+
+// What a source card says about the quote, and whether it opens the PDF.
+function laciteSourceTag(src) {
+    const s = src || {};
+    switch (s.state) {
+    case 'verified': return { text: '✓ wörtlich im Text', cls: 'is-ok', open: true };
+    case 'not_found': return { text: 'Zitat nicht im Text gefunden', cls: 'is-warn', open: true };
+    case 'no_text': return { text: 'kein Volltext – nicht geprüft', cls: 'is-warn', open: true };
+    case 'unknown_key': return { text: 'nicht in der Bibliothek', cls: 'is-mute', open: false };
+    default: return { text: 'ohne Zitat – nicht geprüft', cls: 'is-warn', open: true };
+    }
+}
+
+// The page a reader sees: the checked one, else the agent's hint as a PDF page.
+function laciteSourcePage(src) {
+    const s = src || {};
+    if (s.page_label) return s.page_label;
+    if (s.pdf_page_hint) return 'PDF-S. ' + s.pdf_page_hint;
+    return '';
+}
+
+// The warning under a source whose quote could not be confirmed.
+function laciteSourceWarning(src) {
+    const s = src || {};
+    const key = s.citekey || '';
+    if (s.state === 'not_found') {
+        const short = s.reason === 'too_short' ? ' Das Zitat ist zu kurz, um es sicher zu finden.' : '';
+        const where = s.pdf_page_hint
+            ? ' Die PDF öffnet auf PDF-Seite ' + s.pdf_page_hint + ', die der Agent angegeben hat.'
+            : '';
+        return 'Diesen Wortlaut gibt es in ' + key + ' nicht.' + short + where + ' Eine gedruckte Seite ist nicht bekannt.';
+    }
+    if (s.state === 'no_text') return 'Zu ' + key + ' gibt es keinen Volltext; das Zitat ließ sich nicht prüfen.';
+    if (s.state === 'unknown_key') return key + ' gibt es nicht in der Bibliothek.';
+    if (s.state === 'no_quote') return 'Der Agent hat kein Zitat angegeben; die Stelle ist nicht geprüft.';
+    return '';
+}
+
+// "Claude Code · heute, 14:32 · Verbindung Dissertation · aus 23 Nachschlagungen"
+function laciteReportMeta(report, now) {
+    const r = report || {};
+    const parts = [];
+    if (r.client_name) parts.push(r.client_name);
+    const when = laciteWhen(r.created_at, now);
+    if (when) parts.push(when);
+    if (r.project) parts.push('Verbindung ' + r.project);
+    if (r.lookups) parts.push('aus ' + r.lookups + (r.lookups === 1 ? ' Nachschlagung' : ' Nachschlagungen'));
+    return parts.join(' · ');
+}
+
+// Search hits grouped by report, in the order they came (newest report first).
+function laciteGroupHits(hits) {
+    const groups = [];
+    for (const h of hits || []) {
+        let g = groups.find((x) => x.id === h.report_id);
+        if (!g) {
+            g = { id: h.report_id, title: h.title, created_at: h.created_at, claims: [] };
+            groups.push(g);
+        }
+        g.claims.push(h.claim);
+    }
+    return groups;
+}
+
+// "3 Aussagen in 2 Berichten"
+function laciteHitsLine(hits) {
+    const n = (hits || []).length;
+    const reports = laciteGroupHits(hits).length;
+    if (!n) return 'keine Aussage gefunden';
+    return (n === 1 ? '1 Aussage' : n + ' Aussagen') + ' in ' + (reports === 1 ? '1 Bericht' : reports + ' Berichten');
+}
+
+// The claim text with the query's words marked: parts {text, mark}.
+function laciteMarkParts(text, query) {
+    const value = String(text || '');
+    const words = String(query || '').trim().split(/\s+/).filter((w) => w.length > 1);
+    if (!words.length) return [{ text: value, mark: false }];
+    const esc = words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const re = new RegExp('(' + esc.join('|') + ')', 'gi');
+    const out = [];
+    let last = 0;
+    value.replace(re, (m, _g, at) => {
+        if (at > last) out.push({ text: value.slice(last, at), mark: false });
+        out.push({ text: m, mark: true });
+        last = at + m.length;
+        return m;
+    });
+    if (last < value.length) out.push({ text: value.slice(last), mark: false });
+    return out;
 }
 
 const LACITE_LIVE_STORE = 'lacite.live';
@@ -1048,6 +1167,14 @@ const LaCiteLive = {
             pdf: null,      // the viewer's state
             popup: laciteIsPopup(),
             clearing: false,
+            // Schlussberichte (submit_report)
+            tab: 'log',     // 'log' | 'reports'
+            reports: [], reportsLoaded: false, reportsError: '', persistent: true,
+            report: null,   // the open report, full
+            filter: 'all',  // all | supported | check | unsupported
+            query: '', searchHits: null,
+            srcOpen: null,  // { report, claim, src } shown in the PDF pane
+            copied: '',
         };
     },
     computed: {
@@ -1061,6 +1188,7 @@ const LaCiteLive = {
             return who + ' · ' + calls + since + ' · nur im Speicher';
         },
         cur() {
+            if (this.tab === 'reports') return this.curSource;
             if (!this.open) return null;
             const entry = this.entries.find((e) => e.id === this.open.entry);
             const h = entry && entry.hits && entry.hits[this.open.hit];
@@ -1073,6 +1201,43 @@ const LaCiteLive = {
                 find: h.pdf_page ? laciteFindText(h.text) : '',
             };
         },
+        curSource() {
+            const o = this.srcOpen;
+            const r = this.report;
+            if (!o || !r || r.id !== o.report) return null;
+            const claim = (r.claims || []).find((c) => c.n === o.claim);
+            const src = claim && claim.sources && claim.sources[o.src];
+            if (!src) return null;
+            const known = this.ids[src.citekey] || {};
+            const pdfPage = Number(src.pdf_page) || Number(src.pdf_page_hint) || 1;
+            const text = src.state === 'verified' ? laciteFindText(src.passage) : '';
+            return {
+                key: src.citekey, title: src.title || known.title || '', pageText: laciteSourcePage(src),
+                paperId: src.paper_id || known.id || null, pdfPage, find: text,
+                page: src.page, pdf_page: src.pdf_page || src.pdf_page_hint || null, text,
+            };
+        },
+        emptyText() {
+            return this.tab === 'reports'
+                ? 'Klick auf eine Textstelle, dann öffnet sich die PDF hier an der Stelle.'
+                : 'Klick auf einen Treffer, dann öffnet sich die PDF hier an der Stelle.';
+        },
+        reportCounts() { return (this.report && this.report.counts) || {}; },
+        filteredClaims() {
+            const claims = (this.report && this.report.claims) || [];
+            return this.filter === 'all' ? claims : claims.filter((c) => c.status === this.filter);
+        },
+        filters() {
+            const c = this.reportCounts;
+            return [
+                { id: 'all', label: 'Alle', n: c.total || 0, cls: '' },
+                { id: 'supported', label: 'Belegt', n: c.supported || 0, cls: 'is-ok' },
+                { id: 'check', label: 'Prüfen', n: c.check || 0, cls: 'is-warn' },
+                { id: 'unsupported', label: 'Ohne Beleg', n: c.unsupported || 0, cls: 'is-none' },
+            ];
+        },
+        hitGroups() { return laciteGroupHits(this.searchHits); },
+        hitsLine() { return laciteHitsLine(this.searchHits); },
         pdfLine() {
             const s = this.pdf || {};
             if (s.page) return 'PDF-S. ' + s.page + (s.pages ? ' / ' + s.pages : '');
@@ -1097,13 +1262,20 @@ const LaCiteLive = {
             for (const k of Array.isArray(saved.viewed) ? saved.viewed : []) this.viewed[k] = true;
             if (saved.open && typeof saved.open === 'object') this.open = { entry: saved.open.entry, hit: saved.open.hit };
             this._restoreScroll = Number(saved.scroll) || 0;
+            if (saved.tab === 'reports') this.tab = 'reports';
+            this._restoreReport = Number(saved.report) || 0;
+            if (saved.srcOpen && typeof saved.srcOpen === 'object') this._restoreSrc = saved.srcOpen;
         }
     },
     async mounted() {
         this.listen();
         await this.load();
         // An open hit whose call is gone (cleared, restarted) closes.
-        if (this.open && !this.cur) this.open = null;
+        if (this.open && this.tab === 'log' && !this.cur) this.open = null;
+        if (this.tab === 'reports') {
+            await this.loadReports();
+            if (this._restoreReport) await this.openReport(this._restoreReport, 0, this._restoreSrc);
+        }
         await this.$nextTick();
         if (this._restoreScroll && this.$refs.log) this.$refs.log.scrollTop = this._restoreScroll;
         this._restoreScroll = 0;
@@ -1114,6 +1286,7 @@ const LaCiteLive = {
             try { this._es.close(); } catch (e) { /* gone already */ }
         }
         this.stopPoll();
+        if (this._searchTimer) clearTimeout(this._searchTimer);
     },
     methods: {
         remember() {
@@ -1121,7 +1294,142 @@ const LaCiteLive = {
                 scroll: this.$refs.log ? this.$refs.log.scrollTop : 0,
                 open: this.open,
                 viewed: Object.keys(this.viewed),
+                tab: this.tab,
+                report: this.report ? this.report.id : 0,
+                srcOpen: this.srcOpen,
             });
+        },
+        // ── Schlussberichte ──────────────────────────────────────────────
+        showTab(tab) {
+            if (this.tab === tab) return;
+            this.tab = tab;
+            this.pdf = null;
+            if (tab === 'reports' && !this.reportsLoaded) this.loadReports();
+            // Replaced while another tab was shown: fetch the new version now.
+            if (tab === 'reports' && this.report && this._staleReport === this.report.id) {
+                this.openReport(this.report.id, 0, this.srcOpen);
+            }
+            this.remember();
+        },
+        async loadReports() {
+            try {
+                const out = await lcApi('/reports');
+                this.reports = out.reports || [];
+                this.persistent = out.persistent !== false;
+                this.reportsError = '';
+            } catch (e) {
+                this.reportsError = laciteErrorText(e);
+            } finally {
+                this.reportsLoaded = true;
+            }
+        },
+        // Open a report; with `claimN` scroll to that claim and open its first source.
+        async openReport(id, claimN, src) {
+            this.notice = '';
+            try {
+                const report = await lcApi('/reports/' + encodeURIComponent(id));
+                if (this._staleReport === id) this._staleReport = 0;
+                this.tab = 'reports';
+                this.report = report;
+                this.filter = 'all';
+                this.srcOpen = null;
+                this.pdf = null;
+                this.resolveSources(report);
+            } catch (e) {
+                this.notice = laciteErrorText(e);
+                this.report = null;
+                return;
+            }
+            if (src && src.report === id) this.srcOpen = { report: id, claim: src.claim, src: src.src };
+            await this.$nextTick();
+            if (claimN) {
+                const el = this.$el && this.$el.querySelector && this.$el.querySelector('[data-claim="' + claimN + '"]');
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start' });
+                const claim = (this.report.claims || []).find((c) => c.n === claimN);
+                const first = claim ? (claim.sources || []).findIndex((x) => laciteSourceTag(x).open) : -1;
+                if (first >= 0) this.openSource(claim, first);
+            }
+            this.remember();
+        },
+        backToList() {
+            this.report = null;
+            this.srcOpen = null;
+            this.pdf = null;
+            this.loadReports();
+            this.remember();
+        },
+        onSearch() {
+            if (this._searchTimer) clearTimeout(this._searchTimer);
+            this._searchTimer = setTimeout(() => this.runSearch(), 250);
+        },
+        async runSearch() {
+            const q = this.query.trim();
+            if (!q) {
+                this.searchHits = null;
+                return;
+            }
+            try {
+                const out = await lcApi('/reports?q=' + encodeURIComponent(q));
+                if (q === this.query.trim()) this.searchHits = out.hits || [];
+            } catch (e) {
+                this.reportsError = laciteErrorText(e);
+            }
+        },
+        resolveSources(report) {
+            const keys = new Set();
+            for (const c of report.claims || []) {
+                for (const src of c.sources || []) {
+                    if (!src.citekey) continue;
+                    if (src.paper_id) this.ids[src.citekey] = { id: src.paper_id, has_pdf: src.has_pdf, missing: false };
+                    else if (!(src.citekey in this.ids)) keys.add(src.citekey);
+                }
+            }
+            if (keys.size) return this.resolve([...keys]);
+            return Promise.resolve();
+        },
+        statusOf(claim) { return laciteReportStatus(claim.status); },
+        srcCard(claim, src, i) {
+            const tag = laciteSourceTag(src);
+            const known = this.ids[src.citekey] || {};
+            const hasPdf = src.has_pdf === true || src.has_pdf === false ? src.has_pdf : known.has_pdf;
+            const isOpen = !!this.srcOpen && this.report && this.srcOpen.report === this.report.id
+                && this.srcOpen.claim === claim.n && this.srcOpen.src === i;
+            const open = tag.open && hasPdf !== false && !known.missing;
+            return { tag, isOpen, open, page: laciteSourcePage(src), warning: laciteSourceWarning(src),
+                noPdf: tag.open && !open };
+        },
+        async openSource(claim, i) {
+            const src = claim.sources[i];
+            this.notice = '';
+            let paperId = src.paper_id || (this.ids[src.citekey] || {}).id;
+            if (!paperId) {
+                await this.resolve([src.citekey]);
+                paperId = (this.ids[src.citekey] || {}).id;
+            }
+            if (!paperId) {
+                this.notice = src.citekey + ' gibt es nicht (mehr) in der Bibliothek.';
+                return;
+            }
+            const pdfPage = Number(src.pdf_page) || Number(src.pdf_page_hint) || null;
+            if (!this.hasViewer) {
+                this.goDetail(paperId, { pdf_page: pdfPage, text: src.state === 'verified' ? src.passage : '' });
+                return;
+            }
+            this.srcOpen = { report: this.report.id, claim: claim.n, src: i };
+            this.pdf = null;
+            this.widen();
+            this.remember();
+        },
+        async copyCite(text) {
+            this.copied = (await laciteCopy(text)) ? text : '';
+            if (this.copied) setTimeout(() => { if (this.copied === text) this.copied = ''; }, 2000);
+        },
+        markdownUrl(report) { return BASE + '/reports/' + encodeURIComponent(report.id) + '/markdown'; },
+        reportMeta(report) { return laciteReportMeta(report); },
+        markParts(text) { return laciteMarkParts(text, this.query); },
+        hitSource(claim) {
+            const src = (claim.sources || []).find((x) => x.state === 'verified') || (claim.sources || [])[0];
+            return src ? src.citekey + (laciteSourcePage(src) ? ' · ' + laciteSourcePage(src) : '') : '';
         },
         async load() {
             try {
@@ -1180,6 +1488,16 @@ const LaCiteLive = {
             if (this.entries.length > 200) this.entries.splice(0, this.entries.length - 200);
             if (entry.client && entry.client.name) this.client = { ...entry.client, at: entry.at };
             this.resolveFrom([entry]);
+            if (entry.tool === 'submit_report' && entry.report) {
+                if (this.reportsLoaded) this.loadReports();
+                // Refresh the open report in place: stay on the tab the user is
+                // on and keep the source shown in the PDF pane.
+                if (this.report && this.report.id === entry.report.id) {
+                    if (this.tab === 'reports') this.openReport(entry.report.id, 0, this.srcOpen);
+                    else this._staleReport = entry.report.id;
+                }
+                if (this.query.trim()) this.runSearch();
+            }
         },
         resolveFrom(entries) {
             const keys = new Set();
@@ -1251,7 +1569,8 @@ const LaCiteLive = {
             this.remember();
         },
         closePdf() {
-            this.open = null;
+            if (this.tab === 'reports') this.srcOpen = null;
+            else this.open = null;
             this.pdf = null;
             this.remember();
         },
@@ -1308,19 +1627,132 @@ const LaCiteLive = {
     },
     template: `
 <div class="lacite-live" :class="{ 'has-open': !!cur, 'is-popup': popup }" data-testid="lacite-live">
-  <div class="lacite-live-log">
+  <div class="lacite-live-log" :class="{ 'is-wide': tab === 'reports' }">
     <header class="lacite-live-head">
       <div class="lacite-row-between">
         <div class="lb-eyebrow">LaCite · Live</div>
+        <div class="lb-tabs lacite-live-tabs" role="tablist" aria-label="Ansicht">
+          <button type="button" role="tab" class="lb-tab" :class="{ 'is-active': tab === 'log' }" :aria-selected="tab === 'log' ? 'true' : 'false'"
+                  data-testid="lacite-tab-log" @click="showTab('log')"><span class="lb-tab-label">Verlauf</span><span class="lb-tab-count">{{ entries.length }}</span></button>
+          <button type="button" role="tab" class="lb-tab" :class="{ 'is-active': tab === 'reports' }" :aria-selected="tab === 'reports' ? 'true' : 'false'"
+                  data-testid="lacite-tab-reports" @click="showTab('reports')"><span class="lb-tab-label">Berichte</span><span v-if="reportsLoaded" class="lb-tab-count">{{ reports.length }}</span></button>
+        </div>
+      </div>
+      <template v-if="tab === 'log'">
+        <h1 class="lacite-live-title">Was der Agent nachschlägt</h1>
+        <p class="lacite-live-status"><span class="lacite-live-dot" :class="{ 'is-on': client && client.name }" aria-hidden="true"></span>{{ statusLine }}</p>
         <div class="lacite-actions">
           <button v-if="!popup" type="button" class="lb-key lacite-key-sm" data-testid="lacite-live-window" @click="openWindow">Im eigenen Fenster öffnen</button>
           <button type="button" class="lb-key lacite-key-sm" data-testid="lacite-live-clear" :disabled="clearing || !entries.length" @click="clear">Sitzung leeren</button>
         </div>
-      </div>
-      <h1 class="lacite-live-title">Was der Agent nachschlägt</h1>
-      <p class="lacite-live-status"><span class="lacite-live-dot" :class="{ 'is-on': client && client.name }" aria-hidden="true"></span>{{ statusLine }}</p>
+      </template>
+      <template v-else-if="report">
+        <button type="button" class="lacite-back" data-testid="lacite-report-back" @click="backToList">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>Alle Berichte</button>
+        <h1 class="lacite-live-title lacite-report-title" data-testid="lacite-report-title">{{ report.title }}</h1>
+        <p class="lacite-live-status">{{ reportMeta(report) }}</p>
+        <div class="lacite-row-between lacite-report-bar">
+          <div class="lacite-filters" role="group" aria-label="Aussagen filtern">
+            <button v-for="f in filters" :key="f.id" type="button" class="lacite-chip" :class="[f.cls, { 'is-on': filter === f.id }]"
+                    :aria-pressed="filter === f.id ? 'true' : 'false'" :data-filter="f.id" @click="filter = f.id">
+              <span v-if="f.cls" class="lacite-status-dot" :class="f.cls" aria-hidden="true"></span>{{ f.label }} {{ f.n }}</button>
+          </div>
+          <a class="lb-key lacite-key-sm" :href="markdownUrl(report)" download data-testid="lacite-report-md">Als Markdown speichern</a>
+        </div>
+      </template>
+      <template v-else>
+        <h1 class="lacite-live-title">Schlussberichte</h1>
+        <label for="lacite-report-search" class="lacite-search-label">In allen Aussagen, Zitaten und Schlüsseln suchen</label>
+        <div class="lacite-search">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>
+          <input id="lacite-report-search" v-model="query" type="search" class="lacite-search-input" autocomplete="off"
+                 data-testid="lacite-report-search" @input="onSearch">
+          <span v-if="query.trim() && searchHits" class="lb-mono lacite-search-count">{{ hitsLine }}</span>
+        </div>
+      </template>
     </header>
-    <div ref="log" class="lacite-live-scroll" data-testid="lacite-live-log">
+    <div v-if="tab === 'reports'" class="lacite-live-scroll lacite-reports" data-testid="lacite-reports">
+      <p v-if="notice" class="lacite-error lacite-live-notice" role="alert">{{ notice }}</p>
+      <template v-if="report">
+        <p v-if="report.summary" class="lacite-report-summary">{{ report.summary }}</p>
+        <p v-if="!filteredClaims.length" class="lacite-muted lacite-live-none">Keine Aussage in diesem Filter.</p>
+        <article v-for="c in filteredClaims" :key="c.n" class="lacite-claim" :data-claim="c.n">
+          <span class="lb-mono lacite-claim-n">{{ c.n }}</span>
+          <div class="lacite-claim-body">
+            <div class="lacite-claim-head">
+              <p class="lacite-claim-text">{{ c.claim }}</p>
+              <span class="lacite-status" :class="statusOf(c).cls"><span class="lacite-status-dot" :class="statusOf(c).cls" aria-hidden="true"></span>{{ statusOf(c).label }}</span>
+            </div>
+            <template v-for="(src, i) in c.sources" :key="i">
+              <template v-for="card in [srcCard(c, src, i)]" :key="'card' + i">
+                <button v-if="card.open" type="button" class="lacite-hit lacite-src" :class="{ 'is-open': card.isOpen }"
+                        :aria-pressed="card.isOpen ? 'true' : 'false'" :data-src="c.n + ':' + i" @click="openSource(c, i)">
+                  <span class="lacite-hit-head">
+                    <span class="lacite-cite">{{ src.citekey }}<span v-if="card.page" class="lacite-hit-page"> · {{ card.page }}</span></span>
+                    <span class="lb-mono lacite-src-tag" :class="card.tag.cls">{{ card.tag.text }}</span>
+                  </span>
+                  <span v-if="src.quote" class="lacite-excerpt is-full">„{{ src.quote }}“</span>
+                </button>
+                <div v-else class="lacite-hit lacite-src is-off" :data-src="c.n + ':' + i">
+                  <span class="lacite-hit-head">
+                    <span class="lacite-cite">{{ src.citekey }}<span v-if="card.page" class="lacite-hit-page"> · {{ card.page }}</span></span>
+                    <span class="lb-mono lacite-src-tag" :class="card.tag.cls">{{ card.noPdf ? 'keine PDF' : card.tag.text }}</span>
+                  </span>
+                  <span v-if="src.quote" class="lacite-excerpt is-full">„{{ src.quote }}“</span>
+                </div>
+                <p v-if="card.warning" class="lacite-src-warn">{{ card.warning }}</p>
+              </template>
+              <p v-if="src.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ src.note }}</p>
+              <div v-if="src.state === 'verified'" class="lacite-cite-row">
+                <code class="lacite-cite-code">{{ src.cite }}</code>
+                <button type="button" class="lacite-link-btn" @click="copyCite(src.cite)">{{ copied === src.cite ? 'Kopiert' : 'Kopieren' }}</button>
+              </div>
+            </template>
+            <div v-if="!c.sources.length" class="lacite-nosrc">
+              <span>Keine Stelle in der Bibliothek gefunden.</span>
+              <span v-if="c.searched && c.searched.length" class="lacite-muted">Gesucht: <template v-for="(q, qi) in c.searched" :key="qi"><span class="lacite-part-quote">{{ q }}</span><span v-if="qi < c.searched.length - 1">, </span></template></span>
+            </div>
+            <p v-if="c.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ c.note }}</p>
+          </div>
+        </article>
+      </template>
+      <template v-else>
+        <p v-if="reportsError" class="lacite-error lacite-live-none" role="alert">{{ reportsError }}</p>
+        <p v-else-if="!reportsLoaded" class="lacite-muted lacite-live-none">Lädt …</p>
+        <p v-if="reportsLoaded && !persistent" class="lacite-muted lacite-live-none">Nur bis zum nächsten Start gespeichert: dieses LocalBib ist zu alt für eigene Add-on-Daten (Contract 2.7).</p>
+        <template v-if="query.trim() && searchHits">
+          <section v-for="g in hitGroups" :key="g.id" class="lacite-hit-group">
+            <div class="lacite-hit-group-head">
+              <button type="button" class="lacite-report-link" @click="openReport(g.id)">{{ g.title }}</button>
+              <span class="lb-mono lacite-muted lacite-when">{{ reportMeta({ created_at: g.created_at }) }}</span>
+            </div>
+            <button v-for="c in g.claims" :key="c.n" type="button" class="lacite-claim-hit" :data-hit-claim="g.id + ':' + c.n" @click="openReport(g.id, c.n)">
+              <span class="lb-mono lacite-claim-n">{{ c.n }}</span>
+              <span class="lacite-claim-hit-body">
+                <span class="lacite-claim-hit-text"><template v-for="(part, pi) in markParts(c.claim)" :key="pi"><mark v-if="part.mark" class="lacite-mark">{{ part.text }}</mark><template v-else>{{ part.text }}</template></template></span>
+                <span class="lacite-cite">{{ hitSource(c) }} <span :class="['lacite-status', statusOf(c).cls]">· {{ statusOf(c).label.toLowerCase() }}</span></span>
+              </span>
+            </button>
+          </section>
+        </template>
+        <template v-if="reportsLoaded && !reportsError">
+          <h2 class="lacite-label lacite-reports-label">Alle Berichte</h2>
+          <p v-if="!reports.length" class="lacite-muted lacite-live-none">Noch keine Berichte. Am Ende einer Schreibaufgabe gibt dein Assistent hier seinen Schlussbericht ab: jede zu belegende Aussage mit der passenden Textstelle.</p>
+          <button v-for="r in reports" :key="r.id" type="button" class="lacite-report-row" :data-report="r.id" @click="openReport(r.id)">
+            <span class="lacite-report-row-main">
+              <span class="lacite-report-row-title">{{ r.title }}</span>
+              <span class="lacite-muted lacite-when">{{ reportMeta(r) }}</span>
+            </span>
+            <span class="lacite-counts" :aria-label="(r.counts.supported || 0) + ' belegt, ' + (r.counts.check || 0) + ' prüfen, ' + (r.counts.unsupported || 0) + ' ohne Beleg'">
+              <span><span class="lacite-status-dot is-ok" aria-hidden="true"></span>{{ r.counts.supported || 0 }}</span>
+              <span><span class="lacite-status-dot is-warn" aria-hidden="true"></span>{{ r.counts.check || 0 }}</span>
+              <span><span class="lacite-status-dot is-none" aria-hidden="true"></span>{{ r.counts.unsupported || 0 }}</span>
+            </span>
+          </button>
+        </template>
+      </template>
+    </div>
+    <div v-else ref="log" class="lacite-live-scroll" data-testid="lacite-live-log">
       <p v-if="notice" class="lacite-error lacite-live-notice" role="alert">{{ notice }}</p>
       <p v-if="loading" class="lacite-muted lacite-live-none">Lädt …</p>
       <p v-else-if="loadError" class="lacite-error lacite-live-none" role="alert">{{ loadError }}</p>
@@ -1330,6 +1762,16 @@ const LaCiteLive = {
         <div class="lacite-call-body">
           <p class="lacite-call-text"><span v-for="(part, pi) in laciteCallParts(entry)" :key="pi" :class="'lacite-part-' + part.kind">{{ part.text }}</span></p>
           <p v-if="entry.error" role="status" class="lacite-call-error">Fehler: {{ entry.error }}</p>
+          <button v-if="entry.report" type="button" class="lacite-report-card" :data-open-report="entry.report.id" @click="openReport(entry.report.id)">
+            <span class="lacite-report-card-title">{{ entry.report.title }}</span>
+            <span class="lacite-counts">
+              <span><span class="lacite-status-dot is-ok" aria-hidden="true"></span>{{ entry.report.counts.supported || 0 }} belegt</span>
+              <span><span class="lacite-status-dot is-warn" aria-hidden="true"></span>{{ entry.report.counts.check || 0 }} prüfen</span>
+              <span><span class="lacite-status-dot is-none" aria-hidden="true"></span>{{ entry.report.counts.unsupported || 0 }} ohne</span>
+            </span>
+            <span class="lacite-report-card-go">Bericht öffnen
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></span>
+          </button>
           <template v-if="showHits(entry)">
             <template v-for="c in cards(entry)" :key="c.k">
               <button v-if="c.link" type="button" class="lacite-hit" :class="{ 'is-open': c.isOpen, 'is-seen': c.seen }"
@@ -1381,7 +1823,7 @@ const LaCiteLive = {
   </section>
   <div v-else class="lacite-live-empty">
     <span class="lacite-live-empty-mark" aria-hidden="true">[ ]</span>
-    <span>Klick auf einen Treffer, dann öffnet sich die PDF hier an der Stelle.</span>
+    <span>{{ emptyText }}</span>
   </div>
 </div>`,
 };
@@ -1491,6 +1933,8 @@ window.laCitePure = {
     laciteAssistantSnippet, laciteMissingText, laciteErrorText, LACITE_ERROR_TEXT,
     laciteMissingGroups, laciteFilesLine, laciteImportName, laciteIncludeLine,
     laciteHitPage, laciteCallParts, laciteFindText,
+    laciteWhen, laciteReportStatus, laciteSourceTag, laciteSourcePage, laciteSourceWarning,
+    laciteReportMeta, laciteGroupHits, laciteHitsLine, laciteMarkParts,
 };
 
 LB.registerPlugin({

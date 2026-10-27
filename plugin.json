@@ -1,7 +1,7 @@
 {
   "id": "lacite",
   "name": "LaCite",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "LocalBib",
   "license": "AGPL-3.0-only",
   "tagline": "Deine Bibliothek in deinem LaTeX-Editor: .bib-Datei und KI-Zitate mit Seite.",
@@ -11,7 +11,7 @@
   "api_version": 2,
   "min_core": "0.8.0",
   "python": "any",
-  "permissions": ["library.read", "library.write", "settings.core", "files"],
+  "permissions": ["library.read", "library.write", "settings.core", "files", "storage"],
   "frontend": {
     "script": "frontend/lacite.js",
     "stylesheet": "frontend/lacite.css",

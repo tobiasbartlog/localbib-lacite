@@ -33,7 +33,8 @@ def addon(library):
 
 def test_manifest():
     assert MANIFEST.id == "lacite"
-    assert {p.value for p in MANIFEST.permissions} == {"library.read", "library.write", "settings.core", "files"}
+    assert {p.value for p in MANIFEST.permissions} == {"library.read", "library.write", "settings.core", "files",
+                                                    "storage"}
     assert MANIFEST.nav.route == "/lacite" and MANIFEST.nav.view == "lacite.home"
 
 

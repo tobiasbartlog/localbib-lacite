@@ -10,8 +10,9 @@ Two ways in, both editor-agnostic (docs/lacite/PLAN.md):
 ``activate()`` builds the sync engine over ``api.library`` and the Add-on's
 own ``SettingsApi`` key ``connections``, subscribes to the core's change feed,
 starts the background poll (~30 s), binds the live session (``SessionLog`` +
-``EventBroadcaster`` on the server loop) and registers the router and the nav
-item. ``deactivate()`` stops the poll, unsubscribes, unhooks the session log
+``EventBroadcaster`` on the server loop), opens the Schlussberichte
+(``ReportStore`` in the Add-on's own database ``reports``, contract 2.7; in
+memory on an older core) and registers the router and the nav item. ``deactivate()`` stops the poll, unsubscribes, unhooks the session log
 and ends open live streams; the core registry drops the nav item and unmounts
 the router (residue-free). LaCite writes exactly one
 file per connection and never deletes anything.
@@ -50,11 +51,14 @@ class LaCitePlugin:
         self.mcp: Optional[Any] = None
         self.session: Optional[Any] = None
         self.events: Optional[Any] = None
+        self.reports: Optional[Any] = None
+        self._reports_db: Optional[Any] = None
 
     async def activate(self, api: PluginApi) -> None:
         from lacite.engine import Engine
         from lacite.events import EventBroadcaster
         from lacite.mcp import McpServer
+        from lacite.report_store import ReportStore
         from lacite.session_log import SessionLog
 
         if api.library is None:
@@ -67,8 +71,18 @@ class LaCitePlugin:
         self.events = EventBroadcaster()
         self.events.bind_loop(asyncio.get_running_loop())
         self.session = SessionLog(publish=self.events.publish)
+        # The Schlussberichte: our own database (contract 2.7), else in memory.
+        storage = getattr(api, "storage", None)
+        if storage is not None:
+            self._reports_db = storage.open_plugin_db("reports")
+            self.reports = ReportStore(self._reports_db)
+        else:
+            self.reports = ReportStore.in_memory()
+        session = self.session
         self.mcp = McpServer(api.library, sync_all=lambda: self.engine.sync_all(force=True),
-                             version=self.manifest.version, log=self.session.record)
+                             version=self.manifest.version, log=self.session.record,
+                             reports=self.reports, connections=lambda: self.engine.connections(),
+                             lookups=lambda: session.count_since("submit_report"))
         router = _build_router(self)
         if router is not None:
             api.routes.register_router(router)
@@ -86,7 +100,11 @@ class LaCitePlugin:
             self.session.publish = None
         if self.events is not None:
             self.events.close()  # open live windows' streams end
+        if self._reports_db is not None:
+            self._reports_db.close()
         self.engine = None
+        self.reports = None
+        self._reports_db = None
         self.mcp = None
         self.session = None
         self.events = None
@@ -100,7 +118,7 @@ def _build_router(plugin: "LaCitePlugin") -> Any:
             raise
         return None  # contract-only test run: no web framework installed
     return build_router(plugin.engine, plugin.mcp, version=plugin.manifest.version,
-                        session=plugin.session, events=plugin.events)
+                        session=plugin.session, events=plugin.events, reports=plugin.reports)
 
 
 # The core registry loads this module and reads ``plugin``.

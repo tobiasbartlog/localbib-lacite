@@ -26,7 +26,7 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Callable, Optional
 
-from lacite import session_log
+from lacite import reports, session_log
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 SERVER_NAME = "localbib-lacite"
@@ -47,7 +47,13 @@ INSTRUCTIONS = (
     "suggested \\cite[S.~<page>]{<key>}. When it only has a PDF page, never present "
     "that number as a printed page: cite without a page or tell the user it is the "
     "PDF page. The .bib file in the user's LaTeX project is kept up to date by "
-    "LaCite; call sync_bib after add_by_doi if the user wants to cite the new entry now."
+    "LaCite; call sync_bib after add_by_doi if the user wants to cite the new entry now. "
+    "When you finish a task in which you looked up or cited sources, call submit_report "
+    "once: one claim per statement in the text that needs support, each with the passage "
+    "that supports it as a verbatim quote copied from the find_passages/read_passages text, "
+    "and the statements you could not support with the queries you tried. LocalBib checks "
+    "every quote against the PDF text and sets the page itself; fix the quotes it reports "
+    "as not found and submit again with replaces=<report_id>."
 )
 
 
@@ -126,6 +132,35 @@ _QUERY = {"type": "string", "description": "What to look for (words, a claim, a 
 _KEY = {"type": "string", "description": "The citekey exactly as LocalBib returned it."}
 
 
+_REPORT_SCHEMA = _schema({
+    "title": {"type": "string", "description": "What the report covers, e.g. the chapter or section "
+                                               "you worked on."},
+    "summary": {"type": "string", "description": "One to three sentences: the outcome."},
+    "project_folder": {"type": "string", "description": "Absolute path of the LaTeX project folder "
+                                                        "you work in."},
+    "replaces": {"type": "integer", "description": "report_id of an earlier report this one corrects."},
+    "claims": {"type": "array", "minItems": 1, "maxItems": reports.MAX_CLAIMS, "items": {
+        "type": "object", "additionalProperties": False, "required": ["claim"],
+        "properties": {
+            "claim": {"type": "string", "description": "The statement in the text that needs support."},
+            "sources": {"type": "array", "maxItems": reports.MAX_SOURCES, "items": {
+                "type": "object", "additionalProperties": False, "required": ["citekey", "quote"],
+                "properties": {
+                    "citekey": _KEY,
+                    "quote": {"type": "string", "description": (
+                        "The supporting words copied verbatim from the passage text (an ellipsis "
+                        "marks a gap). Never paraphrase.")},
+                    "pdf_page": {"type": "integer", "description": "The pdf_page of that passage, "
+                                                                   "if you have it."},
+                    "note": {"type": "string", "description": "How far the source carries the claim."},
+                }}},
+            "searched": {"type": "array", "items": {"type": "string"},
+                         "description": "Queries you tried when no source was found."},
+            "note": {"type": "string"},
+        }}},
+}, ("title", "claims"))
+
+
 class McpServer:
     """Dispatch over one Add-on's ``LibraryApi``.
 
@@ -135,9 +170,15 @@ class McpServer:
 
     def __init__(self, library: Any, *, sync_all: Optional[Callable[[], list]] = None,
                  version: str = "0", clock: Callable[[], str] = _now,
-                 log: Optional[Callable[[dict], None]] = None) -> None:
+                 log: Optional[Callable[[dict], None]] = None,
+                 reports: Optional[Any] = None,
+                 connections: Optional[Callable[[], list]] = None,
+                 lookups: Optional[Callable[[], Optional[int]]] = None) -> None:
         self.library = library
         self.sync_all = sync_all
+        self.reports = reports          # ReportStore: submit_report keeps the reports there
+        self.connections = connections  # the engine's connections, to name the project
+        self.lookups = lookups          # tool calls since the last report (the session log)
         self.version = version
         self._clock = clock
         self.log = log  # SessionLog.record: one entry per tools/call
@@ -194,6 +235,18 @@ class McpServer:
                                 "Returns the citekey to cite."),
                 "inputSchema": _schema({"doi": {"type": "string", "description": "The DOI, e.g. 10.1000/xyz"}},
                                        ("doi",)),
+            })
+        if self.reports is not None and self._has("get_passages"):
+            out.append({
+                "name": "submit_report",
+                "description": ("Hand in the final report of a writing task: every statement that needs "
+                                "support, each with the verbatim quote from the passage that supports it. "
+                                "LocalBib checks each quote against the work's text, sets the page from the "
+                                "passage it stands in and shows the report to the user for checking. "
+                                "Statements without support go in too, with the queries you tried. The "
+                                "answer says per source whether the quote was found and gives the citation "
+                                "to use."),
+                "inputSchema": _REPORT_SCHEMA,
             })
         if self.sync_all is not None:
             out.append({
@@ -279,6 +332,30 @@ class McpServer:
             "written": bool(r.get("written")), "error": r.get("error"),
         } for r in results]}
 
+    def _submit_report(self, args: dict, known: dict) -> dict:
+        lookup = getattr(self.library, "get_reference", None)
+        try:
+            body = reports.build(args, self.library, page_info=page_info,
+                                 lookup=lookup if callable(lookup) else None)
+        except reports.ReportError as exc:
+            raise ToolError(str(exc)) from None
+        project = ""
+        if self.connections is not None and args.get("project_folder"):
+            try:
+                project = reports.project_for(args.get("project_folder"), self.connections())
+            except Exception:
+                project = ""
+        lookups = None
+        if self.lookups is not None:
+            try:
+                lookups = self.lookups()
+            except Exception:
+                lookups = None
+        client = (self.last_client or {}).get("name") or ""
+        saved = self.reports.save(body, at=self._clock(), client_name=client, project=project,
+                                  lookups=lookups, replaces=reports.positive_int(args.get("replaces")))
+        return {**reports.agent_answer(saved), "title": saved["title"]}
+
     _BODIES = {
         "search_library": "_search_library",
         "find_passages": "_find_passages",
@@ -286,6 +363,7 @@ class McpServer:
         "get_reference": "_get_reference",
         "add_by_doi": "_add_by_doi",
         "sync_bib": "_sync_bib",
+        "submit_report": "_submit_report",
     }
 
     def call_tool(self, name: str, args: Any) -> dict:

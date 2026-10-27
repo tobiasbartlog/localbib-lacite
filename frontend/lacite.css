@@ -341,3 +341,118 @@
   background: var(--lb-ink); color: var(--lb-bg); border-radius: 10px; padding: 10px 16px; font-size: 13px;
   box-shadow: var(--lb-shadow-lg);
 }
+
+/* ── Schlussberichte (Live → Berichte) ─────────────────────────────────── */
+.lacite-live-log.is-wide { flex-basis: 600px; }
+.lacite-live-tabs { flex: none; }
+.lacite-back {
+  appearance: none; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px;
+  padding: 0; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--lb-ink-3); cursor: pointer;
+}
+.lacite-back:hover { color: var(--lb-ink); }
+.lacite-back:focus-visible, .lacite-chip:focus-visible, .lacite-link-btn:focus-visible,
+.lacite-report-row:focus-visible, .lacite-claim-hit:focus-visible, .lacite-report-card:focus-visible,
+.lacite-report-link:focus-visible { outline: 2px solid var(--lb-accent); outline-offset: 2px; }
+.lacite-report-title { font-size: 23px; line-height: 1.2; }
+.lacite-report-bar { flex-wrap: wrap; gap: 8px; padding-top: 2px; }
+.lacite-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.lacite-chip {
+  appearance: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--lb-hairline-2); border-radius: 14px; background: var(--lb-bg-elev);
+  font: inherit; font-size: 12px; color: var(--lb-ink-2); cursor: pointer;
+}
+.lacite-chip.is-on { background: var(--lb-ink); border-color: var(--lb-ink); color: var(--lb-bg); }
+.lacite-status-dot { flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--lb-mute); }
+.lacite-status-dot.is-ok { background: var(--lb-ok); }
+.lacite-status-dot.is-warn { background: var(--lb-warn); }
+.lacite-status-dot.is-none { background: transparent; border: 1.5px solid var(--lb-mute); box-sizing: border-box; }
+.lacite-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--lb-ink-3); }
+.lacite-status.is-ok { color: var(--lb-ok); }
+.lacite-status.is-warn { color: var(--lb-warn); }
+.lacite-report-summary {
+  margin: 14px 0 6px; font-family: var(--lb-font-serif); font-size: 15px; line-height: 1.5; color: var(--lb-ink-2);
+}
+.lacite-claim {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px;
+  padding: 16px 0; border-bottom: 1px solid var(--lb-hairline);
+}
+.lacite-claim:last-child { border-bottom: 0; }
+.lacite-claim-n { font-size: 12px; color: var(--lb-ink-3); padding-top: 3px; }
+.lacite-claim-body { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.lacite-claim-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.lacite-claim-head .lacite-status { padding-top: 3px; }
+.lacite-claim-text { margin: 0; font-size: 14.5px; line-height: 1.45; font-weight: 500; color: var(--lb-ink); overflow-wrap: anywhere; }
+.lacite-src { gap: 5px; }
+.lacite-excerpt.is-full { display: block; -webkit-line-clamp: unset; overflow: visible; }
+.lacite-src-tag { flex: none; font-size: 10.5px; color: var(--lb-ink-3); text-align: right; }
+.lacite-src-tag.is-ok { color: var(--lb-ok); }
+.lacite-src-tag.is-warn { color: var(--lb-warn); }
+.lacite-src-warn {
+  margin: 0; padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
+  background: var(--lb-warn-soft); color: var(--lb-warn);
+}
+.lacite-agent-note { margin: 0; font-size: 12.5px; color: var(--lb-ink-3); }
+.lacite-agent-who { color: var(--lb-ink-2); }
+.lacite-cite-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.lacite-cite-code {
+  font-family: var(--lb-font-mono); font-size: 11.5px; color: var(--lb-ink-2);
+  background: var(--lb-bg-soft); padding: 2px 6px; border-radius: 4px; overflow-wrap: anywhere;
+}
+.lacite-link-btn {
+  appearance: none; border: 0; background: none; padding: 4px 6px; font: inherit; font-size: 12px;
+  color: var(--lb-ink-3); cursor: pointer;
+}
+.lacite-link-btn:hover { color: var(--lb-ink); }
+.lacite-nosrc {
+  display: flex; flex-direction: column; gap: 4px; padding: 9px 11px;
+  border: 1px dashed var(--lb-hairline-2); border-radius: 10px; font-size: 12.5px; color: var(--lb-ink-2);
+}
+.lacite-search-label { font-size: 12px; color: var(--lb-ink-3); }
+.lacite-search {
+  display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 12px;
+  border: 1px solid var(--lb-hairline-2); border-radius: 8px; background: var(--lb-bg-elev); color: var(--lb-ink-3);
+}
+.lacite-search:focus-within { border-color: var(--lb-accent); }
+.lacite-search-input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font: inherit; font-size: 13.5px; color: var(--lb-ink);
+}
+.lacite-search-count { flex: none; font-size: 11px; color: var(--lb-ink-3); }
+.lacite-hit-group { padding-top: 12px; }
+.lacite-hit-group-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding-bottom: 2px; }
+.lacite-report-link {
+  appearance: none; border: 0; background: none; padding: 0; text-align: left; cursor: pointer;
+  font-family: var(--lb-font-serif); font-size: 16px; font-weight: 500; color: var(--lb-ink);
+}
+.lacite-report-link:hover { color: var(--lb-accent-ink); }
+.lacite-when { flex: none; font-size: 11.5px; }
+.lacite-claim-hit {
+  appearance: none; display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 8px; width: 100%;
+  padding: 10px 0; border: 0; border-bottom: 1px solid var(--lb-hairline); background: none;
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+}
+.lacite-claim-hit:hover .lacite-claim-hit-text { color: var(--lb-accent-ink); }
+.lacite-claim-hit-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lacite-claim-hit-text { font-size: 14px; font-weight: 500; }
+.lacite-mark { background: var(--lb-accent-soft); color: var(--lb-accent-ink); padding: 0 2px; border-radius: 2px; }
+.lacite-reports-label { margin: 26px 0 6px; }
+.lacite-report-row {
+  appearance: none; display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%;
+  padding: 10px 0; border: 0; border-bottom: 1px solid var(--lb-hairline); background: none;
+  text-align: left; font: inherit; color: inherit; cursor: pointer;
+}
+.lacite-report-row:hover .lacite-report-row-title { color: var(--lb-accent-ink); }
+.lacite-report-row-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lacite-report-row-title { font-size: 13.5px; font-weight: 500; }
+.lacite-counts { flex: none; display: flex; gap: 10px; font-family: var(--lb-font-mono); font-size: 11px; color: var(--lb-ink-2); }
+.lacite-counts > span { display: inline-flex; align-items: center; gap: 4px; }
+.lacite-report-card {
+  appearance: none; display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 11px 12px;
+  border: 1px solid var(--lb-hairline-2); border-radius: 10px; background: var(--lb-bg-elev);
+  box-shadow: 0 1px 0 var(--lb-hairline-2); text-align: left; font: inherit; color: inherit; cursor: pointer;
+}
+.lacite-report-card-title { font-family: var(--lb-font-serif); font-size: 15.5px; font-weight: 500; line-height: 1.3; }
+.lacite-report-card-go { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--lb-accent-ink); }
+.lacite-part-tag + .lacite-part-plain { font-weight: 500; }
+@media (max-width: 899px) {
+  .lacite-live:not(.has-open) .lacite-live-log.is-wide { flex: 1 1 auto; }
+}

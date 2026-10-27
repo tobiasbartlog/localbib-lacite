@@ -17,7 +17,8 @@ An entry::
      "tool": "find_passages", "args": {"query": "…"}, "count": 5,
      "hits": [{"citekey", "title", "year", "page_label", "pdf_page", "page",
                "text", "cite", "paper_id", "has_pdf", "created"}],
-     "error": None | "…", "duration_ms": 41}
+     "error": None | "…", "duration_ms": 41,
+     "report": None | {"id", "title", "counts"}}   # submit_report only
 
 ``paper_id``/``has_pdf`` are filled where the tool's own answer already knew
 them (``search_library``, ``get_reference``, ``add_by_doi``), else ``None`` —
@@ -87,7 +88,17 @@ def _hits(tool: str, data: dict, known: dict) -> tuple[list[dict], Optional[int]
         return [_hit(data, known, created=bool(data.get("created")))], 1
     if tool == "sync_bib":
         return [], len(data.get("connections") or [])
+    if tool == "submit_report":
+        return [], (data.get("counts") or {}).get("total")
     return [], None
+
+
+def _report(tool: str, data: Any) -> Optional[dict]:
+    """The report a ``submit_report`` call saved, for the "Bericht" entry."""
+    if tool != "submit_report" or not isinstance(data, dict) or data.get("report_id") is None:
+        return None
+    return {"id": data.get("report_id"), "title": _clip(data.get("title"), ARG_CHARS),
+            "counts": data.get("counts") or {}}
 
 
 def summarize(tool: str, args: Any, data: Optional[dict], *, error: Optional[str] = None,
@@ -107,6 +118,7 @@ def summarize(tool: str, args: Any, data: Optional[dict], *, error: Optional[str
         "hits": hits,
         "error": _clip(error, 500) if error else None,
         "duration_ms": max(0, int(duration_ms)),
+        "report": _report(tool, data),
     }
 
 
@@ -136,6 +148,16 @@ class SessionLog:
         """The calls in the buffer, oldest first."""
         with self._lock:
             return list(self._entries)
+
+    def count_since(self, tool: str) -> int:
+        """Calls recorded after the newest ``tool`` call (all, if none)."""
+        with self._lock:
+            n = 0
+            for entry in reversed(self._entries):
+                if entry.get("tool") == tool:
+                    break
+                n += 1
+            return n
 
     def clear(self) -> None:
         """"Sitzung leeren": the buffer goes, ids keep counting."""

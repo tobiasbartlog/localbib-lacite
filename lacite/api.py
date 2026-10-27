@@ -17,6 +17,9 @@
   GET    /session                      the live session: the last MCP tool calls (in memory)
   DELETE /session                      "Sitzung leeren"
   GET    /events                       SSE: ``{"type": "mcp-call", "entry"}`` per tool call
+  GET    /reports                      the Schlussberichte (newest first); ``?q=`` searches every claim
+  GET    /reports/{id}                 one report with its claims and checked sources
+  GET    /reports/{id}/markdown        "Als Markdown speichern" (a download, never a file write)
 
 Errors are codes (``{"detail": {"code": "error.lacite.…"}}``), never sentences.
 Blocking work (disk, library export, dialogs) runs in sync handlers, i.e. in
@@ -26,7 +29,9 @@ FastAPI's threadpool, never on the event loop.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
@@ -34,7 +39,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from lacite import connections as conns
-from lacite import desktop, engine as engine_mod, session_log, sync, texcheck
+from lacite import desktop, engine as engine_mod, reports as reports_mod, session_log, sync, texcheck
 from lacite.events import EventBroadcaster
 from lacite.mcp import PARSE_ERROR, McpServer, _error
 from lacite.session_log import SessionLog
@@ -78,7 +83,8 @@ async def sse_stream(events: EventBroadcaster):
 
 def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str,
                  session: Optional[SessionLog] = None,
-                 events: Optional[EventBroadcaster] = None) -> APIRouter:
+                 events: Optional[EventBroadcaster] = None,
+                 reports: Optional[Any] = None) -> APIRouter:
     router = APIRouter(prefix=PREFIX)
 
     def _found(conn_id: str) -> dict:
@@ -214,6 +220,38 @@ def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str,
             return Response(status_code=404)
         return StreamingResponse(sse_stream(events), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # --- Schlussberichte (submit_report) --------------------------------------
+    def _report(report_id: int) -> dict:
+        found = reports.get(report_id) if reports is not None else None
+        if found is None:
+            raise _fail(404, "error.lacite.report_not_found")
+        return found
+
+    @router.get("/reports")
+    def list_reports(q: str = "") -> dict:
+        if reports is None:
+            return {"reports": [], "hits": [], "persistent": False}
+        if not q.strip():
+            return {"reports": reports.summaries(), "persistent": reports.persistent}
+        full = reports.all()  # one read for the list and the search
+        out: dict = {"reports": reports.summaries(full), "persistent": reports.persistent,
+                     "hits": reports_mod.search(full, q)}
+        return out
+
+    @router.get("/reports/{report_id}")
+    def get_report(report_id: int) -> dict:
+        return _report(report_id)
+
+    @router.get("/reports/{report_id}/markdown")
+    def report_markdown(report_id: int) -> Response:
+        report = _report(report_id)
+        stem = re.sub(r"[^\w-]+", "-", report.get("title") or "", flags=re.UNICODE).strip("-")[:60]
+        name = f"Schlussbericht-{(report.get('created_at') or '')[:10]}-{stem or report_id}.md"
+        ascii_name = name.encode("ascii", "ignore").decode() or f"Schlussbericht-{report_id}.md"
+        return Response(reports_mod.to_markdown(report), media_type="text/markdown; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="{ascii_name}"; '
+                                                        f"filename*=UTF-8''{quote(name)}"})
 
     @router.get("/mcp")
     def mcp_get() -> Response:
