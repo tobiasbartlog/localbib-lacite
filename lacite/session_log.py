@@ -37,7 +37,7 @@ LIMIT = 200
 HIT_LIMIT = 20          # hits kept per call
 EXCERPT_CHARS = 280     # text kept per hit
 ARG_CHARS = 300         # an argument kept per call
-CORE_ARGS = ("query", "citekey", "doi")
+CORE_ARGS = ("query", "citekey", "doi", "replaces")  # replaces: a submit_report correcting an earlier one
 
 
 def _clip(value: Any, n: int) -> str:
@@ -108,6 +108,7 @@ def summarize(tool: str, args: Any, data: Optional[dict], *, error: Optional[str
     answer (``None`` on an error); ``known`` maps citekey ->
     ``{paper_id, has_pdf}`` where the tool already had them."""
     hits, count = _hits(tool, data, known or {}) if isinstance(data, dict) else ([], None)
+    entry_pages = _read_range(tool, data) if isinstance(data, dict) else ""
     return {
         "at": at,
         "client": ({"name": str(client.get("name") or ""), "version": str(client.get("version") or "")}
@@ -119,7 +120,68 @@ def summarize(tool: str, args: Any, data: Optional[dict], *, error: Optional[str
         "error": _clip(error, 500) if error else None,
         "duration_ms": max(0, int(duration_ms)),
         "report": _report(tool, data),
+        **({"pages": entry_pages} if entry_pages else {}),
     }
+
+
+def _read_range(tool: str, data: dict) -> str:
+    """``read_passages``: the first – last page label of *every* passage read
+    (the hits are cut to ``HIT_LIMIT``, the range must not be)."""
+    if tool != "read_passages":
+        return ""
+    labels = [p.get("page_label") for p in data.get("passages") or [] if isinstance(p, dict) and p.get("page_label")]
+    if not labels:
+        return ""
+    return labels[0] if labels[0] == labels[-1] else f"{labels[0]} – {labels[-1]}"
+
+
+def ends_round(entry: dict) -> bool:
+    """A saved *new* report ends a research round; a failed submit or a
+    correction (``replaces``) does not, so the lookups stay with the next one."""
+    if entry.get("tool") != "submit_report" or entry.get("error"):
+        return False
+    return not (entry.get("args") or {}).get("replaces")
+
+
+LOOKUP_TOOLS = ("search_library", "find_passages", "read_passages", "get_reference", "add_by_doi")
+SEARCH_WORKS = 8        # citekeys kept per lookup in a report
+
+
+def searches(entries: list[dict]) -> list[dict]:
+    """A report's "Gesucht": one line per lookup in ``entries`` (oldest
+    first) — ``{at, tool, query, citekey, doi, count, works, pages, created,
+    error}``. ``works`` are the distinct citekeys the lookup brought up,
+    ``pages`` the first–last page label it read (``read_passages``). Built
+    from what LaCite logged, never from what the agent says it searched."""
+    out = []
+    for entry in entries or []:
+        if not isinstance(entry, dict) or entry.get("tool") not in LOOKUP_TOOLS:
+            continue
+        args = entry.get("args") or {}
+        hits = entry.get("hits") or []
+        works: list[str] = []
+        for h in hits:
+            key = h.get("citekey")
+            if key and key not in works:
+                works.append(key)
+        pages = entry.get("pages") or ""
+        if not pages and entry.get("tool") == "read_passages":  # entries from before the range was kept
+            labels = [h.get("page_label") for h in hits if h.get("page_label")]
+            if labels:
+                pages = labels[0] if labels[0] == labels[-1] else f"{labels[0]} – {labels[-1]}"
+        out.append({
+            "at": entry.get("at") or "",
+            "tool": entry.get("tool"),
+            "query": args.get("query") or "",
+            "citekey": args.get("citekey") or "",
+            "doi": args.get("doi") or "",
+            "count": entry.get("count"),
+            "works": works[:SEARCH_WORKS],
+            "pages": pages,
+            "created": any(bool(h.get("created")) for h in hits),
+            "error": bool(entry.get("error")),
+        })
+    return out
 
 
 class SessionLog:
@@ -150,14 +212,21 @@ class SessionLog:
             return list(self._entries)
 
     def count_since(self, tool: str) -> int:
-        """Calls recorded after the newest ``tool`` call (all, if none)."""
+        """Lookups (:data:`LOOKUP_TOOLS`) recorded since the last round ended
+        (:func:`ends_round`; ``tool`` names the report tool)."""
+        return sum(1 for e in self.since(tool) if e.get("tool") in LOOKUP_TOOLS)
+
+    def since(self, tool: str) -> list[dict]:
+        """The calls recorded after the newest saved new ``tool`` report (all,
+        if none), oldest first — the lookups that led to the next report. A
+        failed ``tool`` call or a correction does not end the round."""
         with self._lock:
-            n = 0
+            out: list[dict] = []
             for entry in reversed(self._entries):
-                if entry.get("tool") == tool:
+                if entry.get("tool") == tool and ends_round(entry):
                     break
-                n += 1
-            return n
+                out.append(entry)
+        return out[::-1]
 
     def clear(self) -> None:
         """"Sitzung leeren": the buffer goes, ids keep counting."""

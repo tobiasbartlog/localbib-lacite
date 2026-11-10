@@ -30,6 +30,10 @@ const REFRESH_MS = 15000;
 
 const LACITE_ERROR_TEXT = {
     'error.lacite.report_not_found': 'Diesen Bericht gibt es nicht mehr.',
+    'error.lacite.source_not_missing': 'Diese Quelle fehlt nicht mehr – der Bericht wird neu geladen.',
+    'error.lacite.add_unavailable': 'Dieses LocalBib kann keine Einträge per DOI anlegen.',
+    'error.lacite.write_denied': 'LaCite darf der Bibliothek nichts hinzufügen (Berechtigung library.write fehlt).',
+    'error.lacite.doi_failed': 'Zu dieser DOI ließ sich kein Eintrag anlegen.',
     'error.lacite.folder_required': 'Bitte wähle einen Ordner.',
     'error.lacite.folder_not_absolute': 'Bitte gib den vollständigen Pfad an, z. B. C:\\Users\\…\\Dissertation.',
     'error.lacite.folder_missing': 'Diesen Ordner gibt es nicht (mehr). Wurde er verschoben oder umbenannt?',
@@ -257,6 +261,13 @@ function laciteFindText(text) {
     return String(text || '').replace(/\s*…\s*$/, '').trim();
 }
 
+// What a verified source frames in the PDF: the quote itself - its part up to
+// the first ellipsis -, else (too short to mean one place) its passage.
+function laciteQuoteFind(quote, passage) {
+    const head = String(quote || '').split(/\[\s*(?:…|\.\.\.)\s*\]|\(\s*(?:…|\.\.\.)\s*\)|…|\.\.\./)[0].trim();
+    return head.replace(/[^\p{L}\p{N}]/gu, '').length >= 16 ? head : laciteFindText(passage);
+}
+
 // ── Schlussberichte: pure helpers ───────────────────────────────────────────
 
 // "heute, 14:32" / "22. Okt., 10:05" (now injectable for tests).
@@ -275,8 +286,29 @@ function laciteWhen(iso, now) {
 const LACITE_STATUS = {
     supported: { label: 'Belegt', cls: 'is-ok' },
     check: { label: 'Prüfen', cls: 'is-warn' },
+    missing: { label: 'Quelle fehlt', cls: 'is-miss' },
     unsupported: { label: 'Ohne Beleg', cls: 'is-none' },
 };
+
+// A source not in the library: `missing`, or `unknown_key` in older reports.
+function laciteIsMissing(src) {
+    const state = (src || {}).state;
+    return state === 'missing' || state === 'unknown_key';
+}
+
+// How a source is named: its citekey, else the title the agent gave, else its DOI.
+function laciteSourceName(src) {
+    const s = src || {};
+    return s.citekey || s.title || (s.doi ? 'doi:' + s.doi : '');
+}
+
+// "Meier, K.; Roth, L. (2021): Cavern storage" for a work not in the library.
+function laciteReferenceLine(src) {
+    const s = src || {};
+    let head = s.authors || '';
+    if (s.year) head = (head + ' (' + s.year + ')').trim();
+    return [head, s.title || ''].filter(Boolean).join(': ');
+}
 
 function laciteReportStatus(status) {
     return LACITE_STATUS[status] || LACITE_STATUS.unsupported;
@@ -289,7 +321,8 @@ function laciteSourceTag(src) {
     case 'verified': return { text: '✓ wörtlich im Text', cls: 'is-ok', open: true };
     case 'not_found': return { text: 'Zitat nicht im Text gefunden', cls: 'is-warn', open: true };
     case 'no_text': return { text: 'kein Volltext – nicht geprüft', cls: 'is-warn', open: true };
-    case 'unknown_key': return { text: 'nicht in der Bibliothek', cls: 'is-mute', open: false };
+    case 'missing':
+    case 'unknown_key': return { text: 'nicht in der Bibliothek', cls: 'is-miss', open: false };
     default: return { text: 'ohne Zitat – nicht geprüft', cls: 'is-warn', open: true };
     }
 }
@@ -314,7 +347,11 @@ function laciteSourceWarning(src) {
         return 'Diesen Wortlaut gibt es in ' + key + ' nicht.' + short + where + ' Eine gedruckte Seite ist nicht bekannt.';
     }
     if (s.state === 'no_text') return 'Zu ' + key + ' gibt es keinen Volltext; das Zitat ließ sich nicht prüfen.';
-    if (s.state === 'unknown_key') return key + ' gibt es nicht in der Bibliothek.';
+    if (laciteIsMissing(s)) {
+        return s.doi
+            ? 'Dieses Werk ist nicht in der Bibliothek. Oben unter „Nicht in der Bibliothek“ lässt es sich per DOI hinzufügen.'
+            : 'Dieses Werk ist nicht in der Bibliothek, und der Agent hat keine DOI angegeben – bitte von Hand hinzufügen, dann „Neu prüfen“.';
+    }
     if (s.state === 'no_quote') return 'Der Agent hat kein Zitat angegeben; die Stelle ist nicht geprüft.';
     return '';
 }
@@ -332,6 +369,7 @@ function laciteReportMeta(report, now) {
 }
 
 // Search hits grouped by report, in the order they came (newest report first).
+// A hit without a claim matched the report itself (question, summary, lookups).
 function laciteGroupHits(hits) {
     const groups = [];
     for (const h of hits || []) {
@@ -340,17 +378,107 @@ function laciteGroupHits(hits) {
             g = { id: h.report_id, title: h.title, created_at: h.created_at, claims: [] };
             groups.push(g);
         }
-        g.claims.push(h.claim);
+        if (h.claim) g.claims.push(h.claim);
     }
     return groups;
 }
 
-// "3 Aussagen in 2 Berichten"
+// "3 Aussagen in 2 Berichten"; only report-level hits: "2 Berichte"
 function laciteHitsLine(hits) {
-    const n = (hits || []).length;
+    const n = (hits || []).filter((h) => h && h.claim).length;
     const reports = laciteGroupHits(hits).length;
-    if (!n) return 'keine Aussage gefunden';
+    if (!n && !reports) return 'nichts gefunden';
+    if (!n) return reports === 1 ? '1 Bericht' : reports + ' Berichte';
     return (n === 1 ? '1 Aussage' : n + ' Aussagen') + ' in ' + (reports === 1 ? '1 Bericht' : reports + ' Berichten');
+}
+
+// ── Rechercheberichte: the pure parts of the new report view ─────────────
+const LACITE_RELEVANCE = {
+    central: { label: 'Zentral', cls: 'is-central' },
+    supporting: { label: 'Ergänzend', cls: 'is-supporting' },
+    marginal: { label: 'Am Rand', cls: 'is-marginal' },
+};
+const LACITE_TOOL_LABEL = {
+    search_library: 'Werke', find_passages: 'Textstellen', read_passages: 'Gelesen',
+    get_reference: 'Nachgeschlagen', add_by_doi: 'Per DOI',
+};
+const LACITE_SEARCH_ROWS = 6;
+
+function laciteRelevance(rel) { return LACITE_RELEVANCE[rel] || null; }
+
+function laciteKindLabel(kind) { return kind === 'research' ? 'Recherchebericht' : 'Zitatprüfung'; }
+
+function lacitePlural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+
+// What one logged lookup was about: the query, else the key or the DOI (twin of reports.search_target).
+function laciteSearchTarget(s) {
+    const e = s || {};
+    return e.query || e.citekey || (e.doi ? 'doi:' + e.doi : '');
+}
+
+// What it brought back, in words (twin of reports.search_result).
+function laciteSearchResult(s) {
+    const e = s || {};
+    if (e.error) return 'Fehler';
+    const n = Number(e.count) || 0;
+    const works = (e.works || []).length;
+    if (e.tool === 'get_reference') return 'Metadaten';
+    if (e.tool === 'add_by_doi') return e.created ? 'hinzugefügt' : 'schon in der Bibliothek';
+    if (!n) return 'nichts gefunden';
+    if (e.tool === 'search_library') return lacitePlural(n, 'Werk', 'Werke');
+    if (e.tool === 'read_passages') return lacitePlural(n, 'Abschnitt', 'Abschnitte');
+    return lacitePlural(n, 'Stelle', 'Stellen') + (works ? ' · ' + lacitePlural(works, 'Werk', 'Werke') : '');
+}
+
+// One row of "Gesucht".
+function laciteSearchRow(s) {
+    const e = s || {};
+    return {
+        time: laciteClock(e.at), tool: LACITE_TOOL_LABEL[e.tool] || e.tool || '',
+        target: laciteSearchTarget(e) + (e.pages ? ' (' + e.pages + ')' : ''),
+        isQuery: !!e.query, result: laciteSearchResult(e),
+        empty: !e.error && e.tool !== 'get_reference' && e.tool !== 'add_by_doi' && !Number(e.count),
+    };
+}
+
+// "Heute" / "Gestern" / "27. Oktober" (with the year when it is not this one).
+function laciteDayLabel(iso, now) {
+    const d = new Date(iso);
+    if (!iso || isNaN(d.getTime())) return '';
+    const today = new Date(now || Date.now());
+    const yesterday = new Date(today.getTime() - 86400000);
+    if (d.toDateString() === today.toDateString()) return 'Heute';
+    if (d.toDateString() === yesterday.toDateString()) return 'Gestern';
+    const opts = { day: 'numeric', month: 'long' };
+    if (d.getFullYear() !== today.getFullYear()) opts.year = 'numeric';
+    return d.toLocaleDateString('de-DE', opts);
+}
+
+// The reports grouped by day, newest first as given: [{ day, reports }].
+function laciteReportGroups(reports, now) {
+    const groups = [];
+    for (const r of reports || []) {
+        const day = laciteDayLabel(r.created_at, now) || 'Ohne Datum';
+        let g = groups[groups.length - 1];
+        if (!g || g.day !== day) {
+            g = { day, reports: [] };
+            groups.push(g);
+        }
+        g.reports.push(r);
+    }
+    return groups;
+}
+
+// What a report row says in numbers: "4 Quellen", "6 bestätigt", "2 offen".
+function laciteReportNumbers(report) {
+    const c = (report && report.counts) || {};
+    // Open = the claims no checked passage stands behind: none found, or only works the library lacks.
+    const open = (c.unsupported || 0) + (c.missing || 0);
+    return {
+        works: c.works !== undefined ? lacitePlural(c.works, 'Quelle', 'Quellen') : '',
+        verified: c.verified !== undefined ? c.verified : (c.supported || 0),
+        check: c.check || 0, open,
+    };
 }
 
 // The claim text with the query's words marked: parts {text, mark}.
@@ -1129,6 +1257,77 @@ const LaCiteAssistant = {
 </section>`,
 };
 
+// ── One source of a report claim, and the works the library lacks ───────────
+//
+// Both views of a report (by work, by claim) draw a source the same way: a
+// button that opens the passage beside the report when the library has the
+// PDF, else a quiet card; the library's warning, the agent's note and the
+// \cite line under it. The parent owns the open state (srcCard) and the copy.
+
+const LaCiteReportSource = {
+    props: {
+        src: { type: Object, required: true }, card: { type: Object, required: true },
+        n: { type: Number, required: true }, i: { type: Number, required: true },
+        showKey: { type: Boolean, default: true }, copied: { type: String, default: '' },
+    },
+    emits: ['open', 'copy'],
+    computed: {
+        head() {
+            const name = this.showKey ? (this.card.open ? this.src.citekey : laciteSourceName(this.src)) : '';
+            return { name, page: this.card.page || (this.showKey ? '' : 'ohne Seitenangabe') };
+        },
+        missing() { return laciteIsMissing(this.src); },
+        ref() { return laciteReferenceLine(this.src); },
+    },
+    template: `
+<button v-if="card.open" type="button" class="lacite-hit lacite-src" :class="{ 'is-open': card.isOpen }"
+        :aria-pressed="card.isOpen ? 'true' : 'false'" :data-src="n + ':' + i" @click="$emit('open')">
+  <span class="lacite-hit-head">
+    <span class="lacite-cite">{{ head.name }}<span v-if="head.page" class="lacite-hit-page"><template v-if="head.name"> · </template>{{ head.page }}</span></span>
+    <span class="lb-mono lacite-src-tag" :class="card.tag.cls">{{ card.tag.text }}</span>
+  </span>
+  <span v-if="src.quote" class="lacite-excerpt is-full">„{{ src.quote }}“</span>
+</button>
+<div v-else class="lacite-hit lacite-src is-off" :class="{ 'is-missing': missing }" :data-src="n + ':' + i">
+  <span class="lacite-hit-head">
+    <span class="lacite-cite">{{ head.name }}<span v-if="head.page" class="lacite-hit-page"><template v-if="head.name"> · </template>{{ head.page }}</span></span>
+    <span class="lb-mono lacite-src-tag" :class="card.tag.cls">{{ card.noPdf ? 'keine PDF' : card.tag.text }}</span>
+  </span>
+  <span v-if="missing && (ref || src.doi)" class="lacite-muted lacite-src-ref">{{ ref }}<template v-if="src.doi"><template v-if="ref"> · </template><span class="lb-mono">doi:{{ src.doi }}</span></template></span>
+  <span v-if="src.quote" class="lacite-excerpt is-full">„{{ src.quote }}“</span>
+</div>
+<p v-if="card.warning" class="lacite-src-warn">{{ card.warning }}</p>
+<p v-if="src.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ src.note }}</p>
+<div v-if="src.state === 'verified'" class="lacite-cite-row">
+  <code class="lacite-cite-code">{{ src.cite }}</code>
+  <button type="button" class="lacite-link-btn" @click="$emit('copy', src.cite)">{{ copied === src.cite ? 'Kopiert' : 'Kopieren' }}</button>
+</div>`,
+};
+
+const LaCiteAbsentWorks = {
+    props: { works: { type: Array, required: true }, adding: { type: String, default: '' } },
+    emits: ['add'],
+    methods: { referenceLine(m) { return laciteReferenceLine({ authors: m.authors, year: m.year }); } },
+    template: `
+<section class="lacite-missing-works" data-testid="lacite-report-missing">
+  <h2 class="lacite-label">Nicht in der Bibliothek ({{ works.length }})</h2>
+  <p class="lacite-muted lacite-missing-intro">Der Agent hat sich auf diese Werke gestützt, aber sie stehen nicht in LocalBib. Erst wenn sie drin sind, lässt sich das Zitat prüfen und zitieren.</p>
+  <div v-for="(m, mi) in works" :key="mi" class="lacite-missing-work" :data-missing="m.doi || m.citekey || m.title">
+    <div class="lacite-missing-work-main">
+      <span class="lacite-missing-work-title">{{ m.title || m.citekey || ('doi:' + m.doi) }}</span>
+      <span v-if="m.authors || m.year" class="lacite-muted">{{ referenceLine(m) }}</span>
+      <span class="lb-mono lacite-muted lacite-missing-work-meta">
+        <template v-if="m.doi">doi:{{ m.doi }}</template><template v-else>ohne DOI</template>
+        <template v-if="m.citekey && m.title"> · Schlüssel {{ m.citekey }}</template>
+        · Aussage {{ (m.claims || []).join(', ') }}</span>
+    </div>
+    <button v-if="m.doi" type="button" class="lb-key lacite-key-sm" :disabled="!!adding" :data-add="m.doi"
+            @click="$emit('add', m)">{{ adding === m.doi ? 'Fügt hinzu …' : 'Per DOI hinzufügen' }}</button>
+    <span v-else class="lacite-muted lacite-missing-work-hint">von Hand hinzufügen, dann „Neu prüfen“</span>
+  </div>
+</section>`,
+};
+
 // ── The live session (/lacite/live) ─────────────────────────────────────────
 //
 // What the writing agent looked up over MCP, newest on top, live over SSE
@@ -1153,11 +1352,15 @@ function laciteIsPopup() {
     }
 }
 
-const LACITE_LIVE_COMPONENTS = {};
+const LACITE_LIVE_COMPONENTS = { LaCiteReportSource, LaCiteAbsentWorks };
 if (LB.components && LB.components.PdfPreview) LACITE_LIVE_COMPONENTS.PdfPreview = LB.components.PdfPreview;
 
 const LaCiteLive = {
     components: LACITE_LIVE_COMPONENTS,
+    watch: {
+        // A filter that hides the previewed report previews the first one it shows.
+        firstShown(id) { if (id && !this.report && !this.previews[id]) this.loadPreview(id); },
+    },
     data() {
         return {
             entries: [], client: null, loading: true, loadError: '', notice: '',
@@ -1171,10 +1374,21 @@ const LaCiteLive = {
             tab: 'log',     // 'log' | 'reports'
             reports: [], reportsLoaded: false, reportsError: '', persistent: true,
             report: null,   // the open report, full
-            filter: 'all',  // all | supported | check | unsupported
+            filter: 'all',  // all | supported | check | missing | unsupported
             query: '', searchHits: null,
             srcOpen: null,  // { report, claim, src } shown in the PDF pane
             copied: '',
+            adding: '',     // the DOI being added from "Nicht in der Bibliothek"
+            rechecking: false,
+            addedNote: '',
+            view: 'claim',  // the open report: 'work' (nach Quelle) | 'claim' (nach Aussage)
+            section: 'kurz',
+            allSearches: false,
+            kindFilter: 'all',      // the list: all | research | check
+            projectFilter: '',
+            previewId: 0,           // the list: the report shown beside it
+            previews: {},           // id -> full report (for the preview)
+            printing: false,
         };
     },
     computed: {
@@ -1210,7 +1424,7 @@ const LaCiteLive = {
             if (!src) return null;
             const known = this.ids[src.citekey] || {};
             const pdfPage = Number(src.pdf_page) || Number(src.pdf_page_hint) || 1;
-            const text = src.state === 'verified' ? laciteFindText(src.passage) : '';
+            const text = src.state === 'verified' ? laciteQuoteFind(src.quote, src.passage) : '';
             return {
                 key: src.citekey, title: src.title || known.title || '', pageText: laciteSourcePage(src),
                 paperId: src.paper_id || known.id || null, pdfPage, find: text,
@@ -1218,6 +1432,10 @@ const LaCiteLive = {
             };
         },
         emptyText() {
+            if (this.tab === 'reports' && !this.report) {
+                return this.reports.length ? 'Zeig auf einen Bericht, dann steht hier, was er gefunden hat.'
+                    : 'Hier erscheint dein erster Bericht, sobald dein Assistent eine Recherche abschließt.';
+            }
             return this.tab === 'reports'
                 ? 'Klick auf eine Textstelle, dann öffnet sich die PDF hier an der Stelle.'
                 : 'Klick auf einen Treffer, dann öffnet sich die PDF hier an der Stelle.';
@@ -1233,8 +1451,85 @@ const LaCiteLive = {
                 { id: 'all', label: 'Alle', n: c.total || 0, cls: '' },
                 { id: 'supported', label: 'Belegt', n: c.supported || 0, cls: 'is-ok' },
                 { id: 'check', label: 'Prüfen', n: c.check || 0, cls: 'is-warn' },
+                ...(c.missing ? [{ id: 'missing', label: 'Quelle fehlt', n: c.missing, cls: 'is-miss' }] : []),
                 { id: 'unsupported', label: 'Ohne Beleg', n: c.unsupported || 0, cls: 'is-none' },
             ];
+        },
+        // The works the report relies on that are not in the library (older
+        // reports without the list: none; "Neu prüfen" builds it).
+        missingWorks() { return (this.report && this.report.missing) || []; },
+        isResearch() { return !!this.report && this.report.kind === 'research'; },
+        kindLabel() { return laciteKindLabel(this.report && this.report.kind); },
+        reportWorks() { return (this.report && this.report.works) || []; },
+        // No work in the library stands behind these (twin of reports.open_claims): read by work they have no card.
+        openClaims() {
+            return ((this.report && this.report.claims) || []).filter((c) => !(c.sources || []).some((s) => !laciteIsMissing(s)));
+        },
+        // "Offen": the open claims, plus a missing work that no open claim names already.
+        openCount() {
+            const open = new Set(this.openClaims.map((c) => c.n));
+            return open.size + this.missingWorks.filter((m) => !(m.claims || []).some((n) => open.has(n))).length;
+        },
+        searches() { return (this.report && this.report.searches) || []; },
+        searchRows() {
+            const rows = this.searches.map(laciteSearchRow);
+            return this.allSearches ? rows : rows.slice(0, LACITE_SEARCH_ROWS);
+        },
+        numbers() { return laciteReportNumbers(this.report); },
+        sections() {
+            const out = [{ id: 'kurz', label: 'Kurz gesagt', n: '' }];
+            if (this.searches.length) out.push({ id: 'gesucht', label: 'Gesucht', n: String(this.searches.length) });
+            if (this.view === 'work') {
+                out.push({ id: 'gefunden', label: 'Gefunden', n: lacitePlural(this.reportWorks.length, 'Quelle', 'Quellen') });
+                if (this.openCount) out.push({ id: 'offen', label: 'Offen', n: String(this.openCount) });
+            } else {
+                out.push({ id: 'gefunden', label: 'Aussagen', n: String(((this.report && this.report.claims) || []).length) });
+            }
+            return out;
+        },
+        // Every source the pane can show, in reading order of the current view: [{ n, i }].
+        sourceOrder() {
+            const r = this.report;
+            if (!r) return [];
+            const claims = {};
+            for (const c of r.claims || []) claims[c.n] = c;
+            const pairs = this.view === 'work'
+                ? this.reportWorks.flatMap((w) => (w.findings || []).map((f) => ({ n: f.n, i: f.src })))
+                : this.filteredClaims.flatMap((c) => (c.sources || []).map((_, i) => ({ n: c.n, i })));
+            return pairs.filter((p) => {
+                const c = claims[p.n];
+                return c && c.sources && c.sources[p.i] && this.srcCard(c, c.sources[p.i], p.i).open;
+            });
+        },
+        sourceIndex() {
+            const o = this.srcOpen;
+            if (!o) return -1;
+            return this.sourceOrder.findIndex((p) => p.n === o.claim && p.i === o.src);
+        },
+        // The list: kind and project filters, grouped by day.
+        kindCounts() {
+            const out = { all: this.reports.length, research: 0, check: 0 };
+            for (const r of this.reports) out[r.kind === 'research' ? 'research' : 'check'] += 1;
+            return out;
+        },
+        projects() { return [...new Set(this.reports.map((r) => r.project).filter(Boolean))].sort(); },
+        shownReports() {
+            return this.reports.filter((r) => (this.kindFilter === 'all' || (r.kind === 'research') === (this.kindFilter === 'research'))
+                && (!this.projectFilter || r.project === this.projectFilter));
+        },
+        reportGroups() { return laciteReportGroups(this.shownReports); },
+        // The archive's right side: the hovered report, else the first one the filters show.
+        preview() {
+            if (this.tab !== 'reports' || this.report) return null;
+            const shown = this.shownReports;
+            const id = shown.some((r) => r.id === this.previewId) ? this.previewId : (shown[0] && shown[0].id);
+            return (id && this.previews[id]) || null;
+        },
+        firstShown() { return (this.shownReports[0] && this.shownReports[0].id) || 0; },
+        // The preview's "Gesucht": the distinct targets, in the order looked up.
+        previewTargets() {
+            const seen = [...new Set(((this.preview && this.preview.searches) || []).map(laciteSearchTarget).filter(Boolean))];
+            return seen.slice(0, 8).join(' · ') + (seen.length > 8 ? ' · …' : '');
         },
         hitGroups() { return laciteGroupHits(this.searchHits); },
         hitsLine() { return laciteHitsLine(this.searchHits); },
@@ -1282,11 +1577,13 @@ const LaCiteLive = {
     },
     beforeUnmount() {
         this.remember();
+        this.dropPrintFrame();
         if (this._es) {
             try { this._es.close(); } catch (e) { /* gone already */ }
         }
         this.stopPoll();
         if (this._searchTimer) clearTimeout(this._searchTimer);
+        if (this._previewTimer) clearTimeout(this._previewTimer);
     },
     methods: {
         remember() {
@@ -1317,11 +1614,125 @@ const LaCiteLive = {
                 this.reports = out.reports || [];
                 this.persistent = out.persistent !== false;
                 this.reportsError = '';
+                this.previews = {};   // a list reload may follow a new version of any report
+                if (!this.report && this.reports.length) this.loadPreview(this.previewId || this.reports[0].id);
             } catch (e) {
                 this.reportsError = laciteErrorText(e);
             } finally {
                 this.reportsLoaded = true;
             }
+        },
+        // The list: the report under the pointer or the focus shows beside it.
+        hoverReport(id) {
+            if (this._previewTimer) clearTimeout(this._previewTimer);
+            this._previewTimer = setTimeout(() => this.loadPreview(id), 120);
+        },
+        async loadPreview(id) {
+            if (!id) return;
+            this.previewId = id;
+            if (this.previews[id]) return;
+            try {
+                const full = await lcApi('/reports/' + encodeURIComponent(id));
+                this.previews[id] = full;
+            } catch (e) { /* the preview stays empty; opening still works */ }
+        },
+        setView(view) {
+            if (this.view === view) return;
+            this.view = view;
+            this.section = 'kurz';
+        },
+        goSection(id) {
+            this.section = id;
+            const el = this.$el && this.$el.querySelector && this.$el.querySelector('[data-section="' + id + '"]');
+            if (el && el.scrollIntoView) el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        },
+        // The pane's ↑/↓: the previous or next source of the report.
+        stepSource(delta) {
+            const order = this.sourceOrder;
+            if (!order.length) return;
+            const at = this.sourceIndex;
+            const next = order[Math.max(0, Math.min(order.length - 1, (at < 0 ? 0 : at + delta)))];
+            const claim = (this.report.claims || []).find((c) => c.n === next.n);
+            if (!claim) return;
+            this.openSource(claim, next.i);
+            this.$nextTick(() => {
+                const el = this.$el && this.$el.querySelector && this.$el.querySelector('[data-src="' + next.n + ':' + next.i + '"]');
+                if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            });
+        },
+        claimOf(n) { return ((this.report && this.report.claims) || []).find((c) => c.n === n) || null; },
+        findings(work) {
+            return (work.findings || []).map((f) => {
+                const claim = this.claimOf(f.n);
+                const src = claim && claim.sources && claim.sources[f.src];
+                return claim && src ? { key: f.n + ':' + f.src, claim, src, i: f.src } : null;
+            }).filter(Boolean);
+        },
+        relevance(rel) { return laciteRelevance(rel); },
+        workBy(work) {
+            const parts = [work.authors, work.year].filter(Boolean).join(' · ');
+            return parts + (parts ? ' · ' : '') + lacitePlural((work.findings || []).length, 'Stelle', 'Stellen');
+        },
+        rowNumbers(r) { return laciteReportNumbers(r); },
+        rowLabel(r) {
+            const x = laciteReportNumbers(r);
+            return [x.works, x.verified + ' bestätigt', x.check + ' prüfen', x.open + ' offen'].filter(Boolean).join(', ');
+        },
+        kindOf(r) { return laciteKindLabel(r && r.kind); },
+        printUrl(report) { return BASE + '/reports/' + encodeURIComponent(report.id) + '/print'; },
+        // "Drucken / PDF": the server's print page in a hidden frame, then the
+        // browser's print dialog ("Als PDF speichern"); a blocked frame opens a tab.
+        // "Drucken / PDF": the server's print page, fetched first (an error
+        // never ends up on paper), in a hidden frame, then the browser's print
+        // dialog ("Als PDF speichern"). The frame goes after printing or with the
+        // next print; a blocked frame opens the page in a tab.
+        async printReport(report) {
+            if (this.printing || !report) return;
+            const url = this.printUrl(report);
+            this.printing = true;
+            this.notice = '';
+            let html = '';
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) throw new Error(String(resp.status));
+                html = await resp.text();
+            } catch (e) {
+                this.printing = false;
+                this.notice = 'Die Druckansicht ließ sich nicht laden. Versuch es noch einmal.';
+                return;
+            }
+            this.dropPrintFrame();
+            try {
+                const frame = document.createElement('iframe');
+                frame.setAttribute('aria-hidden', 'true');
+                frame.setAttribute('data-print', String(report.id));
+                frame.tabIndex = -1;
+                frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+                frame.onload = () => {
+                    try {
+                        const win = frame.contentWindow;
+                        win.addEventListener('afterprint', () => { if (this._printFrame === frame) this.dropPrintFrame(); });
+                        win.focus();
+                        win.print();
+                    } catch (e) {
+                        this.dropPrintFrame();
+                        window.open(url, '_blank');
+                    }
+                };
+                frame.srcdoc = html;
+                this._printFrame = frame;
+                document.body.appendChild(frame);
+                this.printing = false;  // the dialog is the browser's now; never stay stuck on a frame that does not load
+            } catch (e) {
+                this.printing = false;
+                this.dropPrintFrame();
+                window.open(url, '_blank');
+            }
+        },
+        dropPrintFrame() {
+            const frame = this._printFrame;
+            this._printFrame = null;
+            if (frame && frame.parentNode) frame.parentNode.removeChild(frame);
         },
         // Open a report; with `claimN` scroll to that claim and open its first source.
         async openReport(id, claimN, src) {
@@ -1329,11 +1740,21 @@ const LaCiteLive = {
             try {
                 const report = await lcApi('/reports/' + encodeURIComponent(id));
                 if (this._staleReport === id) this._staleReport = 0;
+                const same = this.report && this.report.id === report.id;
                 this.tab = 'reports';
                 this.report = report;
                 this.filter = 'all';
                 this.srcOpen = null;
                 this.pdf = null;
+                // A refresh of the open report keeps how it is read; a new one
+                // starts as its kind reads best. A search hit names a claim.
+                if (!same) {
+                    this.view = report.kind === 'research' ? 'work' : 'claim';
+                    this.section = 'kurz';
+                    this.allSearches = false;
+                }
+                if (claimN) this.view = 'claim';
+                this.previews[report.id] = report;
                 this.resolveSources(report);
             } catch (e) {
                 this.notice = laciteErrorText(e);
@@ -1420,6 +1841,49 @@ const LaCiteLive = {
             this.widen();
             this.remember();
         },
+        // A checked report from the server replaces the open one in place.
+        showChecked(report) {
+            this.report = report;
+            this.srcOpen = null;
+            this.pdf = null;
+            this.resolveSources(report);
+            if (this.reportsLoaded) this.loadReports();
+        },
+        async addMissing(work) {
+            if (this.adding || !work.doi) return;
+            this.adding = work.doi;
+            this.notice = '';
+            this.addedNote = '';
+            try {
+                const out = await lcApi('/reports/' + encodeURIComponent(this.report.id) + '/add-source',
+                    { method: 'POST', body: { doi: work.doi } });
+                this.showChecked(out.report);
+                const a = out.added || {};
+                this.addedNote = (a.created ? a.citekey + ' ist jetzt in der Bibliothek' : 'Schon in der Bibliothek als ' + a.citekey)
+                    + (a.pdf === 'fetched' ? ', mit PDF.' : ' – ohne PDF: das Zitat lässt sich erst mit Volltext prüfen.');
+            } catch (e) {
+                this.notice = laciteErrorText(e);
+                if (e && e.code === 'error.lacite.source_not_missing') this.openReport(this.report.id);
+            } finally {
+                this.adding = '';
+            }
+        },
+        async recheckReport() {
+            if (this.rechecking) return;
+            this.rechecking = true;
+            this.notice = '';
+            this.addedNote = '';
+            try {
+                this.showChecked(await lcApi('/reports/' + encodeURIComponent(this.report.id) + '/recheck', { method: 'POST' }));
+            } catch (e) {
+                this.notice = laciteErrorText(e);
+            } finally {
+                this.rechecking = false;
+            }
+        },
+        sourceName(src) { return laciteSourceName(src); },
+        referenceLine(src) { return laciteReferenceLine(src); },
+        isMissing(src) { return laciteIsMissing(src); },
         async copyCite(text) {
             this.copied = (await laciteCopy(text)) ? text : '';
             if (this.copied) setTimeout(() => { if (this.copied === text) this.copied = ''; }, 2000);
@@ -1427,9 +1891,10 @@ const LaCiteLive = {
         markdownUrl(report) { return BASE + '/reports/' + encodeURIComponent(report.id) + '/markdown'; },
         reportMeta(report) { return laciteReportMeta(report); },
         markParts(text) { return laciteMarkParts(text, this.query); },
+        clock(iso) { return laciteClock(iso); },
         hitSource(claim) {
             const src = (claim.sources || []).find((x) => x.state === 'verified') || (claim.sources || [])[0];
-            return src ? src.citekey + (laciteSourcePage(src) ? ' · ' + laciteSourcePage(src) : '') : '';
+            return src ? laciteSourceName(src) + (laciteSourcePage(src) ? ' · ' + laciteSourcePage(src) : '') : '';
         },
         async load() {
             try {
@@ -1647,74 +2112,172 @@ const LaCiteLive = {
         </div>
       </template>
       <template v-else-if="report">
-        <button type="button" class="lacite-back" data-testid="lacite-report-back" @click="backToList">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>Alle Berichte</button>
-        <h1 class="lacite-live-title lacite-report-title" data-testid="lacite-report-title">{{ report.title }}</h1>
-        <p class="lacite-live-status">{{ reportMeta(report) }}</p>
-        <div class="lacite-row-between lacite-report-bar">
-          <div class="lacite-filters" role="group" aria-label="Aussagen filtern">
-            <button v-for="f in filters" :key="f.id" type="button" class="lacite-chip" :class="[f.cls, { 'is-on': filter === f.id }]"
-                    :aria-pressed="filter === f.id ? 'true' : 'false'" :data-filter="f.id" @click="filter = f.id">
-              <span v-if="f.cls" class="lacite-status-dot" :class="f.cls" aria-hidden="true"></span>{{ f.label }} {{ f.n }}</button>
+        <div class="lacite-row-between lacite-report-top">
+          <button type="button" class="lacite-back" data-testid="lacite-report-back" @click="backToList">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>Alle Berichte</button>
+          <div class="lacite-actions">
+            <button type="button" class="lb-key lacite-key-sm" data-testid="lacite-report-recheck" :disabled="rechecking"
+                    title="Jede Quelle noch einmal gegen die Bibliothek prüfen, z. B. nachdem du ein fehlendes Werk hinzugefügt hast"
+                    @click="recheckReport">{{ rechecking ? 'Prüft …' : 'Neu prüfen' }}</button>
+            <a class="lb-key lacite-key-sm" :href="markdownUrl(report)" download data-testid="lacite-report-md">Als Markdown</a>
+            <button type="button" class="lb-key lacite-key-sm" data-testid="lacite-report-print" :disabled="printing"
+                    @click="printReport(report)">Drucken / PDF</button>
           </div>
-          <a class="lb-key lacite-key-sm" :href="markdownUrl(report)" download data-testid="lacite-report-md">Als Markdown speichern</a>
         </div>
+        <div class="lb-mono lacite-report-eyebrow" data-testid="lacite-report-kind">{{ kindLabel }} · Nr. {{ report.id }}</div>
+        <h1 class="lacite-live-title lacite-report-title" data-testid="lacite-report-title">{{ report.title }}</h1>
+        <p class="lacite-live-status">{{ reportMeta(report) }}<template v-if="persistent"> · <span class="lacite-saved">dauerhaft gespeichert</span></template></p>
+        <nav class="lacite-report-nav" aria-label="Abschnitte des Berichts">
+          <div class="lacite-report-sections">
+            <button v-for="s in sections" :key="s.id" type="button" class="lacite-section-link" :class="{ 'is-on': section === s.id }"
+                    :data-goto="s.id" @click="goSection(s.id)">{{ s.label }}<span v-if="s.n" class="lb-mono lacite-section-n">{{ s.n }}</span></button>
+          </div>
+          <div class="lacite-seg" role="group" aria-label="Bericht ordnen">
+            <button type="button" class="lacite-seg-btn" :class="{ 'is-on': view === 'work' }" :aria-pressed="view === 'work' ? 'true' : 'false'"
+                    data-view="work" @click="setView('work')">nach Quelle</button>
+            <button type="button" class="lacite-seg-btn" :class="{ 'is-on': view === 'claim' }" :aria-pressed="view === 'claim' ? 'true' : 'false'"
+                    data-view="claim" @click="setView('claim')">nach Aussage</button>
+          </div>
+        </nav>
       </template>
       <template v-else>
-        <h1 class="lacite-live-title">Schlussberichte</h1>
-        <label for="lacite-report-search" class="lacite-search-label">In allen Aussagen, Zitaten und Schlüsseln suchen</label>
+        <div class="lacite-row-between lacite-list-title">
+          <h1 class="lacite-live-title">Berichte</h1>
+          <span v-if="reportsLoaded && persistent && reports.length" class="lacite-muted lacite-list-note">{{ reports.length === 1 ? '1 Bericht' : reports.length + ' Berichte' }} · <span class="lacite-saved">dauerhaft in LocalBib, im Backup enthalten</span></span>
+        </div>
+        <label for="lacite-report-search" class="lacite-search-label">In Fragen, Aussagen, Zitaten und Suchbegriffen suchen</label>
         <div class="lacite-search">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>
           <input id="lacite-report-search" v-model="query" type="search" class="lacite-search-input" autocomplete="off"
                  data-testid="lacite-report-search" @input="onSearch">
           <span v-if="query.trim() && searchHits" class="lb-mono lacite-search-count">{{ hitsLine }}</span>
         </div>
+        <div v-if="reports.length" class="lacite-row-between lacite-list-filters">
+          <div class="lacite-filters" role="group" aria-label="Berichte filtern">
+            <button type="button" class="lacite-chip" :class="{ 'is-on': kindFilter === 'all' }" :aria-pressed="kindFilter === 'all' ? 'true' : 'false'"
+                    data-kind="all" @click="kindFilter = 'all'">Alle {{ kindCounts.all }}</button>
+            <button type="button" class="lacite-chip" :class="{ 'is-on': kindFilter === 'research' }" :aria-pressed="kindFilter === 'research' ? 'true' : 'false'"
+                    data-kind="research" @click="kindFilter = 'research'">Recherchen {{ kindCounts.research }}</button>
+            <button type="button" class="lacite-chip" :class="{ 'is-on': kindFilter === 'check' }" :aria-pressed="kindFilter === 'check' ? 'true' : 'false'"
+                    data-kind="check" @click="kindFilter = 'check'">Zitatprüfungen {{ kindCounts.check }}</button>
+          </div>
+          <label v-if="projects.length" class="lacite-project-pick">Projekt
+            <select v-model="projectFilter" class="lacite-select" data-testid="lacite-report-project">
+              <option value="">Alle Projekte</option>
+              <option v-for="p in projects" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </label>
+        </div>
       </template>
     </header>
     <div v-if="tab === 'reports'" class="lacite-live-scroll lacite-reports" data-testid="lacite-reports">
       <p v-if="notice" class="lacite-error lacite-live-notice" role="alert">{{ notice }}</p>
       <template v-if="report">
-        <p v-if="report.summary" class="lacite-report-summary">{{ report.summary }}</p>
-        <p v-if="!filteredClaims.length" class="lacite-muted lacite-live-none">Keine Aussage in diesem Filter.</p>
-        <article v-for="c in filteredClaims" :key="c.n" class="lacite-claim" :data-claim="c.n">
-          <span class="lb-mono lacite-claim-n">{{ c.n }}</span>
-          <div class="lacite-claim-body">
-            <div class="lacite-claim-head">
-              <p class="lacite-claim-text">{{ c.claim }}</p>
-              <span class="lacite-status" :class="statusOf(c).cls"><span class="lacite-status-dot" :class="statusOf(c).cls" aria-hidden="true"></span>{{ statusOf(c).label }}</span>
-            </div>
-            <template v-for="(src, i) in c.sources" :key="i">
-              <template v-for="card in [srcCard(c, src, i)]" :key="'card' + i">
-                <button v-if="card.open" type="button" class="lacite-hit lacite-src" :class="{ 'is-open': card.isOpen }"
-                        :aria-pressed="card.isOpen ? 'true' : 'false'" :data-src="c.n + ':' + i" @click="openSource(c, i)">
-                  <span class="lacite-hit-head">
-                    <span class="lacite-cite">{{ src.citekey }}<span v-if="card.page" class="lacite-hit-page"> · {{ card.page }}</span></span>
-                    <span class="lb-mono lacite-src-tag" :class="card.tag.cls">{{ card.tag.text }}</span>
-                  </span>
-                  <span v-if="src.quote" class="lacite-excerpt is-full">„{{ src.quote }}“</span>
-                </button>
-                <div v-else class="lacite-hit lacite-src is-off" :data-src="c.n + ':' + i">
-                  <span class="lacite-hit-head">
-                    <span class="lacite-cite">{{ src.citekey }}<span v-if="card.page" class="lacite-hit-page"> · {{ card.page }}</span></span>
-                    <span class="lb-mono lacite-src-tag" :class="card.tag.cls">{{ card.noPdf ? 'keine PDF' : card.tag.text }}</span>
-                  </span>
-                  <span v-if="src.quote" class="lacite-excerpt is-full">„{{ src.quote }}“</span>
-                </div>
-                <p v-if="card.warning" class="lacite-src-warn">{{ card.warning }}</p>
-              </template>
-              <p v-if="src.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ src.note }}</p>
-              <div v-if="src.state === 'verified'" class="lacite-cite-row">
-                <code class="lacite-cite-code">{{ src.cite }}</code>
-                <button type="button" class="lacite-link-btn" @click="copyCite(src.cite)">{{ copied === src.cite ? 'Kopiert' : 'Kopieren' }}</button>
-              </div>
-            </template>
-            <div v-if="!c.sources.length" class="lacite-nosrc">
-              <span>Keine Stelle in der Bibliothek gefunden.</span>
-              <span v-if="c.searched && c.searched.length" class="lacite-muted">Gesucht: <template v-for="(q, qi) in c.searched" :key="qi"><span class="lacite-part-quote">{{ q }}</span><span v-if="qi < c.searched.length - 1">, </span></template></span>
-            </div>
-            <p v-if="c.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ c.note }}</p>
+        <section class="lacite-report-sec lacite-report-kurz" data-section="kurz">
+          <div v-if="report.question" class="lacite-ask" data-testid="lacite-report-question">
+            <span class="lacite-ask-label">Deine Anfrage</span>
+            <span class="lacite-ask-text">„{{ report.question }}“</span>
           </div>
-        </article>
+          <p v-if="report.summary" class="lacite-report-summary">{{ report.summary }}</p>
+          <div class="lacite-report-stats">
+            <span><span class="lacite-status-dot is-ok" aria-hidden="true"></span>{{ numbers.verified === 1 ? '1 Stelle' : numbers.verified + ' Stellen' }} wörtlich bestätigt</span>
+            <span v-if="numbers.check"><span class="lacite-status-dot is-warn" aria-hidden="true"></span>{{ numbers.check }} prüfen</span>
+            <span v-if="numbers.open"><span class="lacite-status-dot is-none" aria-hidden="true"></span>{{ numbers.open }} offen</span>
+          </div>
+        </section>
+        <p v-if="addedNote" class="lacite-muted lacite-live-notice" role="status">{{ addedNote }}</p>
+
+        <section v-if="searches.length" class="lacite-report-sec" data-section="gesucht" data-testid="lacite-report-searches">
+          <div class="lacite-sec-head">
+            <h2 class="lacite-label">Gesucht</h2>
+            <span class="lacite-muted lacite-sec-note">aus dem LaCite-Protokoll, nicht vom Agenten</span>
+          </div>
+          <table class="lacite-searches">
+            <tbody>
+              <tr v-for="(row, ri) in searchRows" :key="ri" :class="{ 'is-empty': row.empty }">
+                <td class="lb-mono lacite-searches-time">{{ row.time }}</td>
+                <td class="lacite-searches-tool">{{ row.tool }}</td>
+                <td class="lacite-searches-target" :class="row.isQuery ? 'is-query' : 'lb-mono'">{{ row.target }}</td>
+                <td class="lacite-searches-result">{{ row.result }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <button v-if="searches.length > 6" type="button" class="lacite-more" data-testid="lacite-report-searches-more"
+                  @click="allSearches = !allSearches">{{ allSearches ? 'Weniger zeigen' : 'Alle ' + searches.length + ' Aufrufe zeigen' }}</button>
+        </section>
+
+        <template v-if="view === 'work'">
+          <section class="lacite-report-sec" data-section="gefunden">
+            <div class="lacite-sec-head">
+              <h2 class="lacite-label">Gefunden · {{ reportWorks.length === 1 ? '1 Quelle' : reportWorks.length + ' Quellen' }}</h2>
+              <span v-if="reportWorks.length > 1" class="lacite-muted lacite-sec-note">{{ isResearch ? 'nach Bedeutung für deine Frage' : 'in der Reihenfolge der Aussagen' }}</span>
+            </div>
+            <p v-if="!reportWorks.length" class="lacite-muted lacite-live-none">In deiner Bibliothek hat sich keine Stelle gefunden.</p>
+            <article v-for="w in reportWorks" :key="w.citekey" class="lacite-work" :data-work="w.citekey">
+              <div class="lacite-work-head">
+                <div class="lacite-work-name">
+                  <span class="lacite-work-title">{{ w.title || w.citekey }}</span>
+                  <span class="lacite-work-by"><span class="lb-mono lacite-work-key">{{ w.citekey }}</span> · {{ workBy(w) }}</span>
+                </div>
+                <span v-if="relevance(w.relevance)" class="lacite-rel" :class="relevance(w.relevance).cls">{{ relevance(w.relevance).label }}</span>
+              </div>
+              <div v-if="w.why" class="lacite-why">
+                <span class="lacite-why-label">Warum das für dich zählt · Einschätzung des Agenten</span>
+                <span class="lacite-why-text">{{ w.why }}</span>
+              </div>
+              <div v-for="f in findings(w)" :key="f.key" class="lacite-finding" :data-finding="f.key">
+                <span class="lb-mono lacite-claim-n">{{ f.claim.n }}</span>
+                <div class="lacite-claim-body">
+                  <p class="lacite-claim-text">{{ f.claim.claim }}</p>
+                  <la-cite-report-source :src="f.src" :card="srcCard(f.claim, f.src, f.i)" :n="f.claim.n" :i="f.i" :show-key="false"
+                                  :copied="copied" @open="openSource(f.claim, f.i)" @copy="copyCite"></la-cite-report-source>
+                  <p v-if="f.claim.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ f.claim.note }}</p>
+                </div>
+              </div>
+            </article>
+          </section>
+          <section v-if="openClaims.length || missingWorks.length" class="lacite-report-sec" data-section="offen">
+            <h2 class="lacite-label">Offen · {{ openCount }}</h2>
+            <div v-for="c in openClaims" :key="c.n" class="lacite-open" :data-claim="c.n">
+              <span class="lacite-open-title"><span class="lb-mono lacite-claim-n">{{ c.n }}</span> {{ c.claim }}</span>
+              <template v-if="c.sources && c.sources.length">
+                <span class="lacite-open-text">Belegt nur mit Werken, die nicht in deiner Bibliothek stehen:</span>
+                <la-cite-report-source v-for="(src, i) in c.sources" :key="i" :src="src" :card="srcCard(c, src, i)" :n="c.n" :i="i" :show-key="true"
+                                       :copied="copied" @open="openSource(c, i)" @copy="copyCite"></la-cite-report-source>
+              </template>
+              <span v-else class="lacite-open-text">Keine Stelle in deiner Bibliothek.</span>
+              <span v-if="c.searched && c.searched.length" class="lacite-muted lacite-open-searched">Gesucht: <template v-for="(q, qi) in c.searched" :key="qi"><span class="lacite-part-quote">{{ q }}</span><span v-if="qi < c.searched.length - 1">, </span></template></span>
+              <p v-if="c.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ c.note }}</p>
+            </div>
+            <la-cite-absent-works v-if="missingWorks.length" :works="missingWorks" :adding="adding" @add="addMissing"></la-cite-absent-works>
+          </section>
+        </template>
+
+        <section v-else class="lacite-report-sec" data-section="gefunden">
+          <la-cite-absent-works v-if="missingWorks.length" :works="missingWorks" :adding="adding" @add="addMissing"></la-cite-absent-works>
+          <div class="lacite-filters lacite-claim-filters" role="group" aria-label="Aussagen filtern">
+            <button v-for="f in filters" :key="f.id" type="button" class="lacite-chip" :class="[f.cls, { 'is-on': filter === f.id }]"
+                    :aria-pressed="filter === f.id ? 'true' : 'false'" :data-filter="f.id" @click="filter = f.id">
+              <span v-if="f.cls" class="lacite-status-dot" :class="f.cls" aria-hidden="true"></span>{{ f.label }} {{ f.n }}</button>
+          </div>
+          <p v-if="!filteredClaims.length" class="lacite-muted lacite-live-none">Keine Aussage in diesem Filter.</p>
+          <article v-for="c in filteredClaims" :key="c.n" class="lacite-claim" :data-claim="c.n">
+            <span class="lb-mono lacite-claim-n">{{ c.n }}</span>
+            <div class="lacite-claim-body">
+              <div class="lacite-claim-head">
+                <p class="lacite-claim-text">{{ c.claim }}</p>
+                <span class="lacite-status" :class="statusOf(c).cls"><span class="lacite-status-dot" :class="statusOf(c).cls" aria-hidden="true"></span>{{ statusOf(c).label }}</span>
+              </div>
+              <la-cite-report-source v-for="(src, i) in c.sources" :key="i" :src="src" :card="srcCard(c, src, i)" :n="c.n" :i="i" :show-key="true"
+                              :copied="copied" @open="openSource(c, i)" @copy="copyCite"></la-cite-report-source>
+              <div v-if="!c.sources.length" class="lacite-nosrc">
+                <span>Keine Stelle in der Bibliothek gefunden.</span>
+                <span v-if="c.searched && c.searched.length" class="lacite-muted">Gesucht: <template v-for="(q, qi) in c.searched" :key="qi"><span class="lacite-part-quote">{{ q }}</span><span v-if="qi < c.searched.length - 1">, </span></template></span>
+              </div>
+              <p v-if="c.note" class="lacite-agent-note"><span class="lacite-agent-who">Agent:</span> {{ c.note }}</p>
+            </div>
+          </article>
+        </section>
       </template>
       <template v-else>
         <p v-if="reportsError" class="lacite-error lacite-live-none" role="alert">{{ reportsError }}</p>
@@ -1723,9 +2286,10 @@ const LaCiteLive = {
         <template v-if="query.trim() && searchHits">
           <section v-for="g in hitGroups" :key="g.id" class="lacite-hit-group">
             <div class="lacite-hit-group-head">
-              <button type="button" class="lacite-report-link" @click="openReport(g.id)">{{ g.title }}</button>
+              <button type="button" class="lacite-report-link" :data-hit-report="g.id" @click="openReport(g.id)">{{ g.title }}</button>
               <span class="lb-mono lacite-muted lacite-when">{{ reportMeta({ created_at: g.created_at }) }}</span>
             </div>
+            <p v-if="!g.claims.length" class="lacite-muted lacite-hit-meta">Treffer in Frage, Zusammenfassung oder Suchbegriffen</p>
             <button v-for="c in g.claims" :key="c.n" type="button" class="lacite-claim-hit" :data-hit-claim="g.id + ':' + c.n" @click="openReport(g.id, c.n)">
               <span class="lb-mono lacite-claim-n">{{ c.n }}</span>
               <span class="lacite-claim-hit-body">
@@ -1736,19 +2300,27 @@ const LaCiteLive = {
           </section>
         </template>
         <template v-if="reportsLoaded && !reportsError">
-          <h2 class="lacite-label lacite-reports-label">Alle Berichte</h2>
-          <p v-if="!reports.length" class="lacite-muted lacite-live-none">Noch keine Berichte. Am Ende einer Schreibaufgabe gibt dein Assistent hier seinen Schlussbericht ab: jede zu belegende Aussage mit der passenden Textstelle.</p>
-          <button v-for="r in reports" :key="r.id" type="button" class="lacite-report-row" :data-report="r.id" @click="openReport(r.id)">
-            <span class="lacite-report-row-main">
-              <span class="lacite-report-row-title">{{ r.title }}</span>
-              <span class="lacite-muted lacite-when">{{ reportMeta(r) }}</span>
-            </span>
-            <span class="lacite-counts" :aria-label="(r.counts.supported || 0) + ' belegt, ' + (r.counts.check || 0) + ' prüfen, ' + (r.counts.unsupported || 0) + ' ohne Beleg'">
-              <span><span class="lacite-status-dot is-ok" aria-hidden="true"></span>{{ r.counts.supported || 0 }}</span>
-              <span><span class="lacite-status-dot is-warn" aria-hidden="true"></span>{{ r.counts.check || 0 }}</span>
-              <span><span class="lacite-status-dot is-none" aria-hidden="true"></span>{{ r.counts.unsupported || 0 }}</span>
-            </span>
-          </button>
+          <h2 v-if="query.trim() && searchHits" class="lacite-label lacite-reports-label">Alle Berichte</h2>
+          <p v-if="!reports.length" class="lacite-muted lacite-live-none">Noch keine Berichte. Nach jeder Recherche gibt dein Assistent hier einen Bericht ab: wonach er gesucht hat, was er wo gefunden hat und warum es für dich zählt.</p>
+          <p v-else-if="!shownReports.length" class="lacite-muted lacite-live-none">Kein Bericht in diesem Filter.</p>
+          <section v-for="g in reportGroups" :key="g.day" class="lacite-day">
+            <h2 class="lacite-label lacite-day-label">{{ g.day }}</h2>
+            <button v-for="r in g.reports" :key="r.id" type="button" class="lacite-report-row" :class="{ 'is-preview': preview && preview.id === r.id }"
+                    :data-report="r.id" @click="openReport(r.id)" @mouseenter="hoverReport(r.id)" @focus="hoverReport(r.id)">
+              <span class="lacite-report-row-head">
+                <span class="lacite-report-row-title">{{ r.title }}</span>
+                <span class="lb-mono lacite-muted lacite-when">{{ clock(r.created_at) }}</span>
+              </span>
+              <span class="lacite-report-row-sum"><span class="lacite-report-row-kind">{{ r.kind === 'research' ? 'Recherche' : 'Zitatprüfung' }}</span><template v-if="r.summary"> · {{ r.summary }}</template></span>
+              <span class="lacite-report-row-nums" :aria-label="rowLabel(r)">
+                <span v-if="rowNumbers(r).works">{{ rowNumbers(r).works }}</span>
+                <span><span class="lacite-status-dot is-ok" aria-hidden="true"></span>{{ rowNumbers(r).verified }} bestätigt</span>
+                <span v-if="rowNumbers(r).check"><span class="lacite-status-dot is-warn" aria-hidden="true"></span>{{ rowNumbers(r).check }} prüfen</span>
+                <span v-if="rowNumbers(r).open"><span class="lacite-status-dot is-none" aria-hidden="true"></span>{{ rowNumbers(r).open }} offen</span>
+                <span v-if="r.project">{{ r.project }}</span>
+              </span>
+            </button>
+          </section>
         </template>
       </template>
     </div>
@@ -1804,6 +2376,15 @@ const LaCiteLive = {
           <span class="lacite-pane-work lb-truncate" :title="cur.title">{{ cur.title }}</span>
         </div>
         <div class="lacite-actions">
+          <template v-if="report && sourceOrder.length > 1">
+            <span class="lb-mono lacite-muted lacite-pane-step" data-testid="lacite-pane-step">Stelle {{ sourceIndex + 1 }} von {{ sourceOrder.length }}</span>
+            <button type="button" class="lb-key lb-key-icon" aria-label="Vorige Stelle" title="Vorige Stelle" data-step="-1" :disabled="sourceIndex <= 0" @click="stepSource(-1)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 15l6-6 6 6"/></svg>
+            </button>
+            <button type="button" class="lb-key lb-key-icon" aria-label="Nächste Stelle" title="Nächste Stelle" data-step="1" :disabled="sourceIndex >= sourceOrder.length - 1" @click="stepSource(1)">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+          </template>
           <button type="button" class="lb-key" data-testid="lacite-to-detail" :disabled="!cur.paperId" @click="toDetail">Zur Detailansicht
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
           </button>
@@ -1821,6 +2402,30 @@ const LaCiteLive = {
       </div>
     </div>
   </section>
+  <section v-else-if="preview" class="lacite-live-pane lacite-preview" aria-label="Vorschau des Berichts" data-testid="lacite-report-preview">
+    <div class="lacite-preview-in">
+      <div class="lb-mono lacite-report-eyebrow">{{ kindOf(preview) }} · Nr. {{ preview.id }} · {{ reportMeta({ created_at: preview.created_at }) }}</div>
+      <h2 class="lacite-preview-title">{{ preview.title }}</h2>
+      <p v-if="preview.question" class="lacite-preview-ask">„{{ preview.question }}“</p>
+      <p v-if="preview.summary" class="lacite-preview-sum">{{ preview.summary }}</p>
+      <template v-if="(preview.works || []).length">
+        <h3 class="lacite-label">Gefunden</h3>
+        <div v-for="w in preview.works" :key="w.citekey" class="lacite-preview-work">
+          <span class="lacite-preview-work-title">{{ w.title || w.citekey }}</span>
+          <span class="lacite-preview-work-meta"><span v-if="relevance(w.relevance)" class="lacite-rel" :class="relevance(w.relevance).cls">{{ relevance(w.relevance).label }}</span><span class="lb-mono lacite-muted">{{ w.citekey }} · {{ lacitePlural((w.findings || []).length, 'Stelle', 'Stellen') }}</span></span>
+        </div>
+      </template>
+      <template v-if="(preview.searches || []).length">
+        <h3 class="lacite-label">Gesucht</h3>
+        <p class="lacite-preview-searched">{{ previewTargets }}</p>
+      </template>
+      <div class="lacite-actions lacite-preview-actions">
+        <button type="button" class="lb-key lb-key-primary" data-testid="lacite-preview-open" @click="openReport(preview.id)">Bericht öffnen</button>
+        <a class="lb-key" :href="markdownUrl(preview)" download>Als Markdown</a>
+        <button type="button" class="lb-key" :disabled="printing" @click="printReport(preview)">Drucken / PDF</button>
+      </div>
+    </div>
+  </section>
   <div v-else class="lacite-live-empty">
     <span class="lacite-live-empty-mark" aria-hidden="true">[ ]</span>
     <span>{{ emptyText }}</span>
@@ -1829,6 +2434,7 @@ const LaCiteLive = {
 };
 LaCiteLive.methods.laciteTime = laciteTime;
 LaCiteLive.methods.laciteCallParts = laciteCallParts;
+LaCiteLive.methods.lacitePlural = lacitePlural;
 
 // ── The page ─────────────────────────────────────────────────────────────────
 
@@ -1932,9 +2538,11 @@ window.laCitePure = {
     laciteCount, laciteAgo, laciteStatus, laciteSourceLabel, laciteMcpUrl,
     laciteAssistantSnippet, laciteMissingText, laciteErrorText, LACITE_ERROR_TEXT,
     laciteMissingGroups, laciteFilesLine, laciteImportName, laciteIncludeLine,
-    laciteHitPage, laciteCallParts, laciteFindText,
+    laciteHitPage, laciteCallParts, laciteFindText, laciteQuoteFind,
     laciteWhen, laciteReportStatus, laciteSourceTag, laciteSourcePage, laciteSourceWarning,
-    laciteReportMeta, laciteGroupHits, laciteHitsLine, laciteMarkParts,
+    laciteIsMissing, laciteSourceName, laciteReferenceLine, laciteReportMeta, laciteGroupHits, laciteHitsLine, laciteMarkParts,
+    laciteRelevance, laciteKindLabel, lacitePlural, laciteSearchTarget, laciteSearchResult, laciteSearchRow,
+    laciteDayLabel, laciteReportGroups, laciteReportNumbers,
 };
 
 LB.registerPlugin({

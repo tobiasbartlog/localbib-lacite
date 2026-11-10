@@ -48,12 +48,24 @@ INSTRUCTIONS = (
     "that number as a printed page: cite without a page or tell the user it is the "
     "PDF page. The .bib file in the user's LaTeX project is kept up to date by "
     "LaCite; call sync_bib after add_by_doi if the user wants to cite the new entry now. "
-    "When you finish a task in which you looked up or cited sources, call submit_report "
-    "once: one claim per statement in the text that needs support, each with the passage "
-    "that supports it as a verbatim quote copied from the find_passages/read_passages text, "
-    "and the statements you could not support with the queries you tried. LocalBib checks "
-    "every quote against the PDF text and sets the page itself; fix the quotes it reports "
-    "as not found and submit again with replaces=<report_id>."
+    "Every time you answer a request of the user for which you used the library, call "
+    "submit_report once before you reply, so the user keeps a report of it. A research "
+    "request (what does my library say about X?) is kind=research: title = the question as a "
+    "short headline, question = the user's request in their own words, summary = your answer "
+    "in two or three sentences, one claim per finding (what a source says that matters for "
+    "the question) with the verbatim quote that shows it, works = for each cited work its "
+    "relevance for the question (central, supporting or marginal) and in one sentence why it "
+    "matters for the user, and a claim without sources for each thing you looked for and did "
+    "not find, with the queries you tried. Checking or supporting statements in the user's "
+    "text (e.g. a chapter) is kind=check: one claim per statement that needs support. Quotes "
+    "are copied verbatim from the find_passages/read_passages text, never paraphrased. "
+    "LocalBib records your lookups itself, checks every quote against the PDF text and sets "
+    "the page itself; fix the quotes it reports as not found and submit again with "
+    "replaces=<report_id>. A work you relied on that is "
+    "not in the library (from your own knowledge or the web) goes in too: as a source "
+    "without citekey, with its doi, title, authors and year, so the user can add it. When "
+    "you know its DOI and may change the library, add it with add_by_doi first and cite the "
+    "returned citekey instead."
 )
 
 
@@ -133,23 +145,48 @@ _KEY = {"type": "string", "description": "The citekey exactly as LocalBib return
 
 
 _REPORT_SCHEMA = _schema({
-    "title": {"type": "string", "description": "What the report covers, e.g. the chapter or section "
-                                               "you worked on."},
-    "summary": {"type": "string", "description": "One to three sentences: the outcome."},
+    "kind": {"type": "string", "enum": ["research", "check"], "description": (
+        "research: you answered a question of the user from the library. check: you checked or "
+        "supported statements in the user's text, e.g. a chapter.")},
+    "title": {"type": "string", "description": "A short headline: the question (research) or the "
+                                               "chapter or section you checked."},
+    "question": {"type": "string", "description": "The user's request in their own words (research)."},
+    "summary": {"type": "string", "description": "Two or three sentences: your answer, or the outcome."},
+    "works": {"type": "array", "maxItems": reports.MAX_RATINGS, "description": (
+        "Research: how much each cited work matters for the question. The user sees it labelled as "
+        "your assessment."), "items": {
+        "type": "object", "additionalProperties": False, "required": ["citekey", "relevance"],
+        "properties": {
+            "citekey": _KEY,
+            "relevance": {"type": "string", "enum": list(reports.RELEVANCE)},
+            "why": {"type": "string", "description": "One sentence: why this work matters for the user's "
+                                                     "question or project."},
+        }}},
     "project_folder": {"type": "string", "description": "Absolute path of the LaTeX project folder "
                                                         "you work in."},
     "replaces": {"type": "integer", "description": "report_id of an earlier report this one corrects."},
     "claims": {"type": "array", "minItems": 1, "maxItems": reports.MAX_CLAIMS, "items": {
         "type": "object", "additionalProperties": False, "required": ["claim"],
         "properties": {
-            "claim": {"type": "string", "description": "The statement in the text that needs support."},
+            "claim": {"type": "string", "description": (
+                "Research: a finding — what the source says that matters for the question, in your "
+                "words. Check: the statement in the user's text that needs support. Without sources: "
+                "what you looked for and did not find.")},
             "sources": {"type": "array", "maxItems": reports.MAX_SOURCES, "items": {
-                "type": "object", "additionalProperties": False, "required": ["citekey", "quote"],
+                "type": "object", "additionalProperties": False,
+                "description": ("A work in the library: citekey + quote. A work NOT in the library: "
+                                "no citekey, but doi and/or title (plus authors, year)."),
                 "properties": {
-                    "citekey": _KEY,
+                    "citekey": {"type": "string", "description": (
+                        "The citekey exactly as LocalBib returned it. Leave it out for a work that "
+                        "is not in the library.")},
                     "quote": {"type": "string", "description": (
                         "The supporting words copied verbatim from the passage text (an ellipsis "
-                        "marks a gap). Never paraphrase.")},
+                        "marks a gap). Never paraphrase. Required for a work in the library.")},
+                    "doi": {"type": "string", "description": "The work's DOI, e.g. 10.1000/xyz."},
+                    "title": {"type": "string", "description": "The work's title (when it has no citekey)."},
+                    "authors": {"type": "string", "description": "The authors, \"Family, Given; ...\"."},
+                    "year": {"type": "integer"},
                     "pdf_page": {"type": "integer", "description": "The pdf_page of that passage, "
                                                                    "if you have it."},
                     "note": {"type": "string", "description": "How far the source carries the claim."},
@@ -173,16 +210,28 @@ class McpServer:
                  log: Optional[Callable[[dict], None]] = None,
                  reports: Optional[Any] = None,
                  connections: Optional[Callable[[], list]] = None,
-                 lookups: Optional[Callable[[], Optional[int]]] = None) -> None:
+                 lookups: Optional[Callable[[], Optional[int]]] = None,
+                 searches: Optional[Callable[[], list]] = None) -> None:
         self.library = library
         self.sync_all = sync_all
         self.reports = reports          # ReportStore: submit_report keeps the reports there
         self.connections = connections  # the engine's connections, to name the project
         self.lookups = lookups          # tool calls since the last report (the session log)
+        self.searches = searches        # those lookups as a report's "Gesucht" (session_log.searches)
         self.version = version
         self._clock = clock
         self.log = log  # SessionLog.record: one entry per tools/call
         self.last_client: Optional[dict] = None
+
+    def now(self) -> str:
+        """The time a report is saved at (the server's clock, injectable in tests)."""
+        return self._clock()
+
+    def reference_lookup(self) -> Optional[Callable[[str], Optional[dict]]]:
+        """``LibraryApi.get_reference`` when the host has it: title, year and
+        Item id per source of a report."""
+        lookup = getattr(self.library, "get_reference", None)
+        return lookup if callable(lookup) else None
 
     # --- tool table --------------------------------------------------------
     def _has(self, name: str) -> bool:
@@ -239,13 +288,16 @@ class McpServer:
         if self.reports is not None and self._has("get_passages"):
             out.append({
                 "name": "submit_report",
-                "description": ("Hand in the final report of a writing task: every statement that needs "
-                                "support, each with the verbatim quote from the passage that supports it. "
-                                "LocalBib checks each quote against the work's text, sets the page from the "
-                                "passage it stands in and shows the report to the user for checking. "
-                                "Statements without support go in too, with the queries you tried. The "
-                                "answer says per source whether the quote was found and gives the citation "
-                                "to use."),
+                "description": ("Hand in the report of what you just did with the library — after every "
+                                "request of the user in which you searched, read or cited it. Research "
+                                "(kind=research): the question, your answer in short, each finding with the "
+                                "verbatim quote that shows it, and per work why it matters for the user. "
+                                "Check (kind=check): every statement in the user's text that needs support, "
+                                "each with its verbatim quote. LocalBib adds the lookups you made, checks "
+                                "each quote against the work's text, sets the page from the passage it "
+                                "stands in and keeps the report for the user. What you did not find goes "
+                                "in too, with the queries you tried. The answer says per source whether "
+                                "the quote was found and gives the citation to use."),
                 "inputSchema": _REPORT_SCHEMA,
             })
         if self.sync_all is not None:
@@ -332,11 +384,23 @@ class McpServer:
             "written": bool(r.get("written")), "error": r.get("error"),
         } for r in results]}
 
+    def _logged_searches(self) -> list:
+        if self.searches is None:
+            return []
+        try:
+            return list(self.searches() or [])
+        except Exception:  # the log never fails a report
+            return []
+
     def _submit_report(self, args: dict, known: dict) -> dict:
-        lookup = getattr(self.library, "get_reference", None)
+        replaces = reports.positive_int(args.get("replaces")) if isinstance(args, dict) else None
+        previous = self.reports.get(replaces) if replaces is not None else None
+        # A correction keeps the lookups of the report it corrects and takes
+        # none of the open round: those may already belong to the next request.
+        searches = list(previous.get("searches") or []) if previous is not None else self._logged_searches()
         try:
             body = reports.build(args, self.library, page_info=page_info,
-                                 lookup=lookup if callable(lookup) else None)
+                                 lookup=self.reference_lookup(), searches=searches)
         except reports.ReportError as exc:
             raise ToolError(str(exc)) from None
         project = ""
@@ -346,14 +410,16 @@ class McpServer:
             except Exception:
                 project = ""
         lookups = None
-        if self.lookups is not None:
+        if previous is not None:
+            lookups = previous.get("lookups")
+        elif self.lookups is not None:
             try:
                 lookups = self.lookups()
             except Exception:
                 lookups = None
         client = (self.last_client or {}).get("name") or ""
-        saved = self.reports.save(body, at=self._clock(), client_name=client, project=project,
-                                  lookups=lookups, replaces=reports.positive_int(args.get("replaces")))
+        saved = self.reports.save(body, at=self.now(), client_name=client, project=project,
+                                  lookups=lookups, replaces=replaces)
         return {**reports.agent_answer(saved), "title": saved["title"]}
 
     _BODIES = {

@@ -18,8 +18,12 @@
   DELETE /session                      "Sitzung leeren"
   GET    /events                       SSE: ``{"type": "mcp-call", "entry"}`` per tool call
   GET    /reports                      the Schlussberichte (newest first); ``?q=`` searches every claim
-  GET    /reports/{id}                 one report with its claims and checked sources
-  GET    /reports/{id}/markdown        "Als Markdown speichern" (a download, never a file write)
+  GET    /reports/{id}                 one report with its claims, works, lookups and checked sources
+  GET    /reports/{id}/markdown        "Als Markdown" (a download, never a file write)
+  GET    /reports/{id}/print           "Drucken / PDF": the report as a standalone printable page
+  POST   /reports/{id}/add-source      add a missing work by its DOI (``create_by_doi``), then check
+                                       the report again; the new citekey replaces the missing source
+  POST   /reports/{id}/recheck         check every source again against the library as it is now
 
 Errors are codes (``{"detail": {"code": "error.lacite.…"}}``), never sentences.
 Blocking work (disk, library export, dialogs) runs in sync handlers, i.e. in
@@ -35,13 +39,13 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from lacite import connections as conns
-from lacite import desktop, engine as engine_mod, reports as reports_mod, session_log, sync, texcheck
+from lacite import desktop, engine as engine_mod, report_html, reports as reports_mod, session_log, sync, texcheck
 from lacite.events import EventBroadcaster
-from lacite.mcp import PARSE_ERROR, McpServer, _error
+from lacite.mcp import PARSE_ERROR, McpServer, _error, page_info
 from lacite.session_log import SessionLog
 
 PREFIX = "/api/plugins/lacite"
@@ -66,6 +70,10 @@ class SyncIn(BaseModel):
 
 class PickIn(BaseModel):
     initial: str = ""
+
+
+class DoiIn(BaseModel):
+    doi: str = ""
 
 
 def _fail(status: int, code: str, **params: Any) -> HTTPException:
@@ -226,7 +234,7 @@ def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str,
         found = reports.get(report_id) if reports is not None else None
         if found is None:
             raise _fail(404, "error.lacite.report_not_found")
-        return found
+        return reports_mod.complete(found)
 
     @router.get("/reports")
     def list_reports(q: str = "") -> dict:
@@ -247,11 +255,55 @@ def build_router(engine: "engine_mod.Engine", mcp: McpServer, *, version: str,
     def report_markdown(report_id: int) -> Response:
         report = _report(report_id)
         stem = re.sub(r"[^\w-]+", "-", report.get("title") or "", flags=re.UNICODE).strip("-")[:60]
-        name = f"Schlussbericht-{(report.get('created_at') or '')[:10]}-{stem or report_id}.md"
-        ascii_name = name.encode("ascii", "ignore").decode() or f"Schlussbericht-{report_id}.md"
+        word = "Recherchebericht" if report.get("kind") == reports_mod.RESEARCH else "Schlussbericht"
+        name = f"{word}-{(report.get('created_at') or '')[:10]}-{stem or report_id}.md"
+        ascii_name = name.encode("ascii", "ignore").decode() or f"{word}-{report_id}.md"
         return Response(reports_mod.to_markdown(report), media_type="text/markdown; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="{ascii_name}"; '
                                                         f"filename*=UTF-8''{quote(name)}"})
+
+    @router.get("/reports/{report_id}/print")
+    def report_print(report_id: int) -> Response:
+        """"Drucken / PDF": the report as one standalone page for the
+        browser's print dialog (the SPA prints it from a hidden frame)."""
+        return HTMLResponse(report_html.to_html(_report(report_id)))
+
+    def _resave(report: dict, added: Optional[dict] = None) -> dict:
+        body = reports_mod.recheck(report, mcp.library, page_info=page_info,
+                                   lookup=mcp.reference_lookup(), added=added)
+        saved = reports.save(body, at=mcp.now(), client_name=report.get("client_name") or "",
+                             project=report.get("project") or "", lookups=report.get("lookups"),
+                             replaces=report["id"])
+        return reports_mod.complete(saved)
+
+    @router.post("/reports/{report_id}/add-source")
+    def report_add_source(report_id: int, body: DoiIn) -> dict:
+        """"In LocalBib hinzufügen" for a work the report lists as missing:
+        the core's DOI intake with what the agent said about the work."""
+        report = _report(report_id)
+        doi = reports_mod.normalize_doi(body.doi)
+        found = next((m for m in report.get("missing") or [] if m.get("doi") and m["doi"] == doi), None)
+        if not doi or found is None:
+            raise _fail(409, "error.lacite.source_not_missing")
+        create = getattr(mcp.library, "create_by_doi", None)
+        if not callable(create):
+            raise _fail(409, "error.lacite.add_unavailable")
+        try:
+            added = create(doi, title=found.get("title") or "", authors=found.get("authors") or None,
+                           year=found.get("year"))
+        except PermissionError:
+            raise _fail(403, "error.lacite.write_denied") from None
+        except ValueError:
+            raise _fail(422, "error.lacite.doi_failed", doi=doi) from None
+        if added.get("created") and mcp.sync_all is not None:
+            mcp.sync_all()
+        saved = _resave(report, {doi: added.get("citekey")})
+        return {"report": saved, "added": {"doi": added.get("doi") or doi, "citekey": added.get("citekey"),
+                                           "created": bool(added.get("created")), "pdf": added.get("pdf")}}
+
+    @router.post("/reports/{report_id}/recheck")
+    def report_recheck(report_id: int) -> dict:
+        return _resave(_report(report_id))
 
     @router.get("/mcp")
     def mcp_get() -> Response:

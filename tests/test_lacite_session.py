@@ -264,3 +264,41 @@ def test_sse_stream_formats_events():
             await stream.__anext__()
 
     asyncio.run(scenario())
+
+
+def test_since_and_searches_give_a_reports_lookups_from_the_log():
+    from lacite.session_log import searches
+    log = SessionLog()
+    log.record(summarize("find_passages", {"query": "old"}, {"results": []}, at="t0"))
+    log.record(summarize("submit_report", {}, {"report_id": 1, "counts": {}}, at="t1"))
+    log.record(summarize("find_passages", {"query": "clay bond"}, {"results": [
+        {"citekey": "A", "page_label": "S. 3"}, {"citekey": "B"}, {"citekey": "A"}]}, at="t2"))
+    log.record(summarize("read_passages", {"citekey": "A"}, {"citekey": "A", "passages": [
+        {"text": "x", "page_label": "S. 64"}, {"text": "y", "page_label": "S. 72"}]}, at="t3"))
+    log.record(summarize("add_by_doi", {"doi": "10.1/x"}, {"citekey": "C", "created": True}, at="t4"))
+    log.record(summarize("find_passages", {"query": "broken"}, None, error="boom", at="t5"))
+    log.record(summarize("sync_bib", {}, {"connections": []}, at="t6"))
+    since = log.since("submit_report")
+    assert [e["at"] for e in since] == ["t2", "t3", "t4", "t5", "t6"]
+    lines = searches(since)
+    assert [s["tool"] for s in lines] == ["find_passages", "read_passages", "add_by_doi", "find_passages"]
+    assert lines[0] == {"at": "t2", "tool": "find_passages", "query": "clay bond", "citekey": "", "doi": "",
+                        "count": 3, "works": ["A", "B"], "pages": "", "created": False, "error": False}
+    assert lines[1]["pages"] == "S. 64 – S. 72" and lines[1]["citekey"] == "A"
+    assert lines[2]["created"] is True and lines[2]["doi"] == "10.1/x"
+    assert lines[3]["error"] is True
+    assert [e["at"] for e in SessionLog().since("submit_report")] == []
+
+
+def test_a_failed_submit_or_a_correction_does_not_end_the_round_and_a_read_keeps_its_whole_range():
+    from lacite.session_log import HIT_LIMIT, searches
+    log = SessionLog()
+    log.record(summarize("find_passages", {"query": "a"}, {"results": []}, at="t0"))
+    log.record(summarize("submit_report", {"title": "x"}, None, error="claims missing", at="t1"))
+    log.record(summarize("submit_report", {"replaces": 3}, {"report_id": 3, "counts": {}}, at="t2"))
+    rows = [{"text": str(i), "page_label": f"S. {10 + i}"} for i in range(HIT_LIMIT + 10)]
+    log.record(summarize("read_passages", {"citekey": "A"}, {"citekey": "A", "passages": rows}, at="t3"))
+    assert [e["at"] for e in log.since("submit_report")] == ["t0", "t1", "t2", "t3"]
+    assert log.count_since("submit_report") == 2  # lookups only
+    read = searches(log.since("submit_report"))[-1]
+    assert read["pages"] == f"S. 10 – S. {10 + HIT_LIMIT + 9}" and read["count"] == HIT_LIMIT + 10

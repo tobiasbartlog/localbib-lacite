@@ -59,7 +59,7 @@ class LaCitePlugin:
         from lacite.events import EventBroadcaster
         from lacite.mcp import McpServer
         from lacite.report_store import ReportStore
-        from lacite.session_log import SessionLog
+        from lacite.session_log import SessionLog, searches
 
         if api.library is None:
             raise RuntimeError("LaCite braucht die Berechtigung library.read")
@@ -82,7 +82,8 @@ class LaCitePlugin:
         self.mcp = McpServer(api.library, sync_all=lambda: self.engine.sync_all(force=True),
                              version=self.manifest.version, log=self.session.record,
                              reports=self.reports, connections=lambda: self.engine.connections(),
-                             lookups=lambda: session.count_since("submit_report"))
+                             lookups=lambda: session.count_since("submit_report"),
+                             searches=lambda: searches(session.since("submit_report")))
         router = _build_router(self)
         if router is not None:
             api.routes.register_router(router)

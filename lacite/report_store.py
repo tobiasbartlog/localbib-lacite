@@ -18,6 +18,8 @@ import sqlite3
 import threading
 from typing import Any, Optional
 
+from lacite.reports import kind_of
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,6 +34,7 @@ CREATE TABLE IF NOT EXISTS reports (
 """
 
 LIST_COLUMNS = ("id", "created_at", "updated_at", "title", "client_name", "project", "lookups")
+LIST_DROPS = ("claims", "works", "searches", "ratings", "missing")  # the list needs none of these
 
 
 class ReportStore:
@@ -85,12 +88,14 @@ class ReportStore:
         return [_full(r) for r in rows]
 
     def summaries(self, full: Optional[list[dict]] = None) -> list[dict]:
-        """The list: every report without its claims, newest first. Pass
+        """The list: every report with its title, kind, question, summary and
+        counts but without claims, works and lookups, newest first. Pass
         ``full`` (from :meth:`all`) to reuse rows already read."""
         out = []
         for report in (self.all() if full is None else [dict(r) for r in full]):
-            report.pop("claims", None)
-            report.pop("summary", None)
+            for heavy in LIST_DROPS:
+                report.pop(heavy, None)
+            report["kind"] = kind_of(report.get("kind"), report.get("question") or "")
             out.append(report)
         return out
 

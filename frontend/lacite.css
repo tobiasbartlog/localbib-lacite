@@ -343,7 +343,7 @@
 }
 
 /* ── Schlussberichte (Live → Berichte) ─────────────────────────────────── */
-.lacite-live-log.is-wide { flex-basis: 600px; }
+.lacite-live-log.is-wide { flex-basis: 680px; }
 .lacite-live-tabs { flex: none; }
 .lacite-back {
   appearance: none; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px;
@@ -365,10 +365,12 @@
 .lacite-status-dot { flex: none; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--lb-mute); }
 .lacite-status-dot.is-ok { background: var(--lb-ok); }
 .lacite-status-dot.is-warn { background: var(--lb-warn); }
+.lacite-status-dot.is-miss { background: var(--lb-danger); }
 .lacite-status-dot.is-none { background: transparent; border: 1.5px solid var(--lb-mute); box-sizing: border-box; }
 .lacite-status { flex: none; display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--lb-ink-3); }
 .lacite-status.is-ok { color: var(--lb-ok); }
 .lacite-status.is-warn { color: var(--lb-warn); }
+.lacite-status.is-miss { color: var(--lb-danger); }
 .lacite-report-summary {
   margin: 14px 0 6px; font-family: var(--lb-font-serif); font-size: 15px; line-height: 1.5; color: var(--lb-ink-2);
 }
@@ -387,6 +389,8 @@
 .lacite-src-tag { flex: none; font-size: 10.5px; color: var(--lb-ink-3); text-align: right; }
 .lacite-src-tag.is-ok { color: var(--lb-ok); }
 .lacite-src-tag.is-warn { color: var(--lb-warn); }
+.lacite-src-tag.is-miss { color: var(--lb-danger); }
+.lacite-src-ref { display: block; font-size: 12px; overflow-wrap: anywhere; }
 .lacite-src-warn {
   margin: 0; padding: 7px 10px; border-radius: 8px; font-size: 12.5px;
   background: var(--lb-warn-soft); color: var(--lb-warn);
@@ -436,8 +440,8 @@
 .lacite-mark { background: var(--lb-accent-soft); color: var(--lb-accent-ink); padding: 0 2px; border-radius: 2px; }
 .lacite-reports-label { margin: 26px 0 6px; }
 .lacite-report-row {
-  appearance: none; display: flex; justify-content: space-between; align-items: center; gap: 16px; width: 100%;
-  padding: 10px 0; border: 0; border-bottom: 1px solid var(--lb-hairline); background: none;
+  appearance: none; display: flex; flex-direction: column; gap: 3px;
+  padding: 11px 10px; margin: 0 -10px; width: calc(100% + 20px); border-radius: 8px; border: 0; border-bottom: 1px solid var(--lb-hairline); background: none;
   text-align: left; font: inherit; color: inherit; cursor: pointer;
 }
 .lacite-report-row:hover .lacite-report-row-title { color: var(--lb-accent-ink); }
@@ -456,3 +460,143 @@
 @media (max-width: 899px) {
   .lacite-live:not(.has-open) .lacite-live-log.is-wide { flex: 1 1 auto; }
 }
+
+/* "Nicht in der Bibliothek": the works a report relies on that LocalBib lacks */
+.lacite-missing-works {
+  display: flex; flex-direction: column; gap: 8px; margin: 14px 0 4px; padding: 12px 14px;
+  border: 1px solid var(--lb-hairline-2); border-radius: 10px; background: var(--lb-danger-soft);
+}
+.lacite-missing-works .lacite-label { margin: 0; }
+.lacite-missing-intro { margin: 0; font-size: 12.5px; }
+.lacite-missing-work {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 8px 0 0; border-top: 1px solid var(--lb-hairline);
+}
+.lacite-missing-work-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 12.5px; }
+.lacite-missing-work-title { font-size: 13.5px; font-weight: 500; color: var(--lb-ink); overflow-wrap: anywhere; }
+.lacite-missing-work-meta { font-size: 11px; overflow-wrap: anywhere; }
+.lacite-missing-work-hint { flex: none; max-width: 40%; font-size: 12px; text-align: right; }
+
+/* ── Rechercheberichte: the report's sections, by work or by claim ──────── */
+.lacite-report-top { gap: 12px; }
+.lacite-report-eyebrow { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--lb-accent-ink); }
+.lacite-saved { color: var(--lb-ok); }
+.lacite-report-nav {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin: 2px -18px -12px; padding: 0 18px; border-top: 1px solid var(--lb-hairline);
+}
+.lacite-report-sections { display: flex; gap: 2px; flex-wrap: wrap; }
+.lacite-section-link {
+  appearance: none; display: inline-flex; align-items: center; gap: 6px; height: 38px; padding: 0 10px;
+  border: 0; border-bottom: 2px solid transparent; background: none; font: inherit; font-size: 12.5px;
+  color: var(--lb-ink-3); cursor: pointer;
+}
+.lacite-section-link:hover { color: var(--lb-ink); }
+.lacite-section-link.is-on { color: var(--lb-ink); border-bottom-color: var(--lb-accent); }
+.lacite-section-n { font-size: 10.5px; color: var(--lb-ink-3); }
+.lacite-seg { display: inline-flex; padding: 2px; border: 1px solid var(--lb-hairline-2); border-radius: 8px; background: var(--lb-bg-soft); }
+.lacite-seg-btn {
+  appearance: none; height: 26px; padding: 0 10px; border: 0; border-radius: 6px; background: none;
+  font: inherit; font-size: 12px; color: var(--lb-ink-3); cursor: pointer;
+}
+.lacite-seg-btn.is-on { background: var(--lb-bg-elev); color: var(--lb-ink); box-shadow: 0 1px 0 var(--lb-hairline-2); }
+.lacite-section-link:focus-visible, .lacite-seg-btn:focus-visible, .lacite-more:focus-visible,
+.lacite-select:focus-visible { outline: 2px solid var(--lb-accent); outline-offset: 2px; }
+
+.lacite-report-sec { padding: 18px 0 6px; scroll-margin-top: 8px; }
+.lacite-report-sec + .lacite-report-sec { border-top: 1px solid var(--lb-hairline); }
+.lacite-report-kurz { padding-top: 14px; }
+.lacite-report-kurz .lacite-report-summary { margin: 12px 0 10px; font-size: 16px; color: var(--lb-ink); }
+.lacite-sec-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 10px; }
+.lacite-sec-head .lacite-label { margin: 0; }
+.lacite-sec-note { font-size: 11.5px; }
+.lacite-ask {
+  display: flex; flex-direction: column; gap: 3px; padding: 10px 13px;
+  border-radius: 10px; background: var(--lb-bg-soft);
+}
+.lacite-ask-label { font-family: var(--lb-font-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--lb-ink-3); }
+.lacite-ask-text { font-family: var(--lb-font-serif); font-style: italic; font-size: 15px; line-height: 1.45; color: var(--lb-ink); }
+.lacite-report-stats { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; color: var(--lb-ink-2); }
+.lacite-report-stats > span, .lacite-report-row-nums > span { display: inline-flex; align-items: center; gap: 5px; }
+
+.lacite-searches { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.lacite-searches td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--lb-hairline); vertical-align: baseline; }
+.lacite-searches tr:last-child td { border-bottom: 0; }
+.lacite-searches-time { width: 1%; white-space: nowrap; font-size: 11px; color: var(--lb-ink-3); }
+.lacite-searches-tool { width: 1%; white-space: nowrap; color: var(--lb-ink-3); }
+.lacite-searches-target { color: var(--lb-ink); overflow-wrap: anywhere; }
+.lacite-searches-target.is-query { font-family: var(--lb-font-serif); font-style: italic; font-size: 14px; }
+.lacite-searches-target.lb-mono { font-size: 11.5px; }
+.lacite-searches-result { text-align: right; color: var(--lb-ink-2); }
+.lacite-searches tr.is-empty .lacite-searches-result { color: var(--lb-ink-3); }
+.lacite-more {
+  appearance: none; margin-top: 6px; padding: 4px 0; border: 0; background: none;
+  font: inherit; font-size: 12.5px; color: var(--lb-accent-ink); cursor: pointer;
+}
+
+.lacite-work {
+  display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 14px 16px;
+  border: 1px solid var(--lb-hairline-2); border-radius: 12px; background: var(--lb-bg-elev);
+}
+.lacite-work-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.lacite-work-name { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.lacite-work-title { font-family: var(--lb-font-serif); font-size: 17px; font-weight: 500; line-height: 1.3; color: var(--lb-ink); overflow-wrap: anywhere; }
+.lacite-work-by { font-size: 12px; color: var(--lb-ink-3); }
+.lacite-work-key { font-size: 11.5px; color: var(--lb-ink-2); }
+.lacite-rel {
+  flex: none; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 11px;
+  font-size: 11.5px; font-weight: 500; background: var(--lb-bg-soft); color: var(--lb-ink-3);
+}
+.lacite-rel.is-central { background: var(--lb-accent-soft); color: var(--lb-accent-ink); }
+.lacite-rel.is-supporting { background: var(--lb-ok-soft); color: var(--lb-ok); }
+.lacite-rel.is-marginal { background: var(--lb-bg-soft); color: var(--lb-ink-3); }
+.lacite-why { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-radius: 8px; background: var(--lb-bg-soft); }
+.lacite-why-label { font-size: 11.5px; color: var(--lb-ink-3); }
+.lacite-why-text { font-size: 13.5px; line-height: 1.5; color: var(--lb-ink); }
+.lacite-finding {
+  display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 10px;
+  padding-top: 10px; border-top: 1px solid var(--lb-hairline);
+}
+.lacite-finding .lacite-claim-text { font-size: 14px; }
+.lacite-open {
+  display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; padding: 10px 13px;
+  border: 1px dashed var(--lb-hairline-2); border-radius: 10px; font-size: 12.5px;
+}
+.lacite-open-title { font-size: 14px; font-weight: 500; color: var(--lb-ink); }
+.lacite-open-text { color: var(--lb-ink-2); }
+.lacite-claim-filters { margin: 12px 0 2px; }
+
+.lacite-list-title { align-items: baseline; }
+.lacite-list-note { font-size: 12px; }
+.lacite-list-filters { flex-wrap: wrap; gap: 8px; }
+.lacite-project-pick { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--lb-ink-3); }
+.lacite-select {
+  height: 28px; padding: 0 8px; border: 1px solid var(--lb-hairline-2); border-radius: 8px;
+  background: var(--lb-bg-elev); font: inherit; font-size: 12.5px; color: var(--lb-ink);
+}
+.lacite-day { padding-top: 14px; }
+.lacite-day-label { margin: 0 0 2px; }
+.lacite-report-row:hover, .lacite-report-row.is-preview { background: var(--lb-bg-soft); }
+.lacite-report-row-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.lacite-report-row-head .lacite-report-row-title { font-family: var(--lb-font-serif); font-size: 15.5px; line-height: 1.3; }
+.lacite-report-row-sum {
+  font-size: 12.5px; color: var(--lb-ink-2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lacite-report-row-kind { color: var(--lb-ink-3); }
+.lacite-report-row-nums { display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: var(--lb-font-mono); font-size: 11px; color: var(--lb-ink-3); }
+.lacite-hit-meta { margin: 2px 0 8px; font-size: 12px; }
+
+.lacite-pane-step { font-size: 11px; white-space: nowrap; }
+.lacite-preview { overflow-y: auto; }
+.lacite-preview-in { display: flex; flex-direction: column; gap: 10px; max-width: 560px; padding: 18px 20px; }
+.lacite-preview-in .lacite-label { margin: 10px 0 0; }
+.lacite-preview-title { margin: 0; font-family: var(--lb-font-serif); font-size: 22px; font-weight: 500; line-height: 1.25; color: var(--lb-ink); }
+.lacite-preview-ask { margin: 0; font-family: var(--lb-font-serif); font-style: italic; font-size: 14.5px; color: var(--lb-ink-2); }
+.lacite-preview-sum { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--lb-ink); }
+.lacite-preview-work { display: flex; flex-direction: column; gap: 4px; padding: 8px 0; border-bottom: 1px solid var(--lb-hairline); }
+.lacite-preview-work-title { font-size: 13.5px; font-weight: 500; color: var(--lb-ink); }
+.lacite-preview-work-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.lacite-preview-searched { margin: 0; font-size: 12.5px; color: var(--lb-ink-2); overflow-wrap: anywhere; }
+.lacite-preview-actions { padding-top: 8px; flex-wrap: wrap; }
+@media (max-width: 899px) { .lacite-preview { display: none; } }
